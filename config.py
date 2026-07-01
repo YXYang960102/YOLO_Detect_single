@@ -1,4 +1,4 @@
-MODEL_PATH = "TEL_2026_Field_V3.v1i.yolov8/runs/detect/train-2/weights/best.pt"
+MODEL_PATH = "weights/best.pt"
 
 CAMERA_INDEX = 0
 IMAGE_SIZE = 640

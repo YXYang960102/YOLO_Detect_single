@@ -6,12 +6,19 @@ __pycache__/
 .venv/
 venv/
 
+weights/*.pt
+
 runs/
 */runs/
 
 *.mp4
 *.mov
 *.avi
+
+samples/images/*
+!samples/images/.gitkeep
+samples/videos/*
+!samples/videos/.gitkeep
 
 *.cache
 *.log
