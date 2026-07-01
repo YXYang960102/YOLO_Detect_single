@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../train/images
+test: ../test/images
+
+nc: 1
+names: ['hole']
+
+roboflow:
+  workspace: s-workspace-8y82z
+  project: tel_2026_field_v3
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/s-workspace-8y82z/tel_2026_field_v3/dataset/1

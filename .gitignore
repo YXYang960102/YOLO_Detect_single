@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+
+.DS_Store
+.env
+.venv/
+venv/
+
+runs/
+*/runs/
+
+*.mp4
+*.mov
+*.avi
+
+*.cache
+*.log
