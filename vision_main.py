@@ -4,7 +4,7 @@ import cv2
 from ultralytics import YOLO
 
 from config import CAMERA_INDEX, CONFIDENCE, IMAGE_SIZE, MODEL_PATH
-from hole_grid import assign_ids
+from hole_grid import assign_ids, grid_memory_count, reset_grid_memory
 from red_target import TargetStabilizer, select_red_target
 from serial_tx import VisionSerial
 
@@ -79,7 +79,7 @@ def draw_debug(frame, holes, target_hole, tx, ty, valid):
     )
     cv2.putText(
         frame,
-        f"TX:{tx} TY:{ty} Target:{target_id} Valid:{valid}",
+        f"TX:{tx} TY:{ty} Target:{target_id} Valid:{valid} Mem:{grid_memory_count()}",
         (20, 80),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.7,
@@ -137,8 +137,12 @@ def main():
             draw_debug(frame, holes, target_hole, tx, ty, valid)
             cv2.imshow("Coordinate System", frame)
 
-            if cv2.waitKey(1) == 27:
+            key = cv2.waitKey(1) & 0xFF
+
+            if key == 27:
                 break
+            if key == ord("r"):
+                reset_grid_memory()
 
     cap.release()
     cv2.destroyAllWindows()

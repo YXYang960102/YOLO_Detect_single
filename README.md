@@ -14,13 +14,7 @@ Example:
 -38,12,0,7,1
 ```
 
-## Setup
-
-Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
+## Model File
 
 Place the trained model at:
 
@@ -30,28 +24,110 @@ weights/best.pt
 
 The model file is intentionally ignored by git. Keep large model files in GitHub Releases, Git LFS, or copy them manually onto the Jetson.
 
-## Run With Webcam
+## Windows Setup
+
+Open PowerShell in this project folder:
+
+```powershell
+cd path\to\YOLO_Detect_single
+py -3 -m venv venv
+.\venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+If PowerShell blocks the virtual environment activation script, run:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+Then activate the environment again:
+
+```powershell
+.\venv\Scripts\Activate.ps1
+```
+
+Run with the default webcam:
+
+```powershell
+python vision_main.py
+```
+
+Run with serial output:
+
+```powershell
+python vision_main.py --serial --serial-port COM3
+```
+
+Replace `COM3` with the Arduino port shown in Device Manager.
+
+## macOS Setup
+
+Open Terminal in this project folder:
+
+```bash
+cd /path/to/YOLO_Detect_single
+python3 -m venv venv
+source venv/bin/activate
+python3 -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Run with the default webcam:
 
 ```bash
 python3 vision_main.py
 ```
 
-The old test entrypoint still works:
+Run with serial output:
 
 ```bash
-python3 test_coordinate.py
+python3 vision_main.py --serial --serial-port /dev/tty.usbmodemXXXX
 ```
 
-## Run With Serial Output
+Replace `/dev/tty.usbmodemXXXX` with the Arduino port on your Mac.
+
+## Linux Setup
+
+Open a terminal in this project folder:
+
+```bash
+cd /path/to/YOLO_Detect_single
+python3 -m venv venv
+source venv/bin/activate
+python3 -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+Run with the default webcam:
+
+```bash
+python3 vision_main.py
+```
+
+Run with serial output:
 
 ```bash
 python3 vision_main.py --serial --serial-port /dev/ttyUSB0
 ```
 
-On macOS the port may look like:
+On some Linux systems, the user must be added to the serial device group before using `/dev/ttyUSB0` or `/dev/ttyACM0`:
 
 ```bash
-python3 vision_main.py --serial --serial-port /dev/tty.usbmodemXXXX
+sudo usermod -a -G dialout $USER
+```
+
+Log out and log back in after changing the group.
+
+## Run Notes
+
+Show the full target board once before testing partial views. The vision code remembers stable hole positions when enough holes are visible, then uses that memory only when the frame has very few holes left. Press `r` in the display window to reset the remembered grid after moving the camera a lot. Press `Esc` to close the display window.
+
+The old test entrypoint still works:
+
+```bash
+python3 test_coordinate.py
 ```
 
 ## Folders
