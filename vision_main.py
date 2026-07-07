@@ -68,6 +68,7 @@ def draw_debug(frame, holes, target_hole, tx, ty, valid):
         )
 
     target_id = target_hole["id"] if target_hole is not None else 0
+    id_mode = holes[0].get("id_mode", "-") if len(holes) > 0 else "-"
     cv2.putText(
         frame,
         f"Detected: {len(holes)}",
@@ -79,7 +80,7 @@ def draw_debug(frame, holes, target_hole, tx, ty, valid):
     )
     cv2.putText(
         frame,
-        f"TX:{tx} TY:{ty} Target:{target_id} Valid:{valid} Mem:{grid_memory_count()}",
+        f"TX:{tx} TY:{ty} Target:{target_id} Valid:{valid} Mem:{grid_memory_count()} ID:{id_mode}",
         (20, 80),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.7,

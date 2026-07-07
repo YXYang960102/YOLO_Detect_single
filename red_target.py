@@ -3,6 +3,7 @@ import numpy as np
 
 from config import (
     INNER_SCALE,
+    RED_TARGET_SWITCH_MARGIN,
     RED_SCORE_THRESHOLD,
     RING_SCALE,
     TARGET_STABLE_FRAMES,
@@ -75,13 +76,22 @@ class TargetStabilizer:
         self.stable_target_id = None
         self.candidate_target_id = None
         self.candidate_count = 0
+        self.last_raw_target_id = None
 
-    def update(self, target_id):
+    def update(self, target_id, target_score=0.0, runner_up_score=0.0):
         if target_id is None:
             self.candidate_target_id = None
             self.candidate_count = 0
             self.stable_target_id = None
+            self.last_raw_target_id = None
             return None
+
+        if (
+            self.stable_target_id is not None
+            and target_id != self.stable_target_id
+            and target_score - runner_up_score < RED_TARGET_SWITCH_MARGIN
+        ):
+            target_id = self.stable_target_id
 
         if target_id == self.candidate_target_id:
             self.candidate_count += 1
@@ -92,11 +102,12 @@ class TargetStabilizer:
         if self.candidate_count >= self.stable_frames:
             self.stable_target_id = self.candidate_target_id
 
+        self.last_raw_target_id = target_id
         return self.stable_target_id
 
 
 def select_red_target(frame, holes, stabilizer):
-    best_red_hole = None
+    red_holes = []
 
     for hole in holes:
         score, ring_box = red_ring_score(frame, hole)
@@ -104,11 +115,15 @@ def select_red_target(frame, holes, stabilizer):
         hole["ring_box"] = ring_box
 
         if score >= RED_SCORE_THRESHOLD:
-            if best_red_hole is None or score > best_red_hole["red_score"]:
-                best_red_hole = hole
+            red_holes.append(hole)
+
+    red_holes.sort(key=lambda h: h["red_score"], reverse=True)
+    best_red_hole = red_holes[0] if len(red_holes) > 0 else None
+    runner_up_score = red_holes[1]["red_score"] if len(red_holes) > 1 else 0.0
 
     raw_target_id = best_red_hole["id"] if best_red_hole is not None else None
-    target_id = stabilizer.update(raw_target_id)
+    raw_target_score = best_red_hole["red_score"] if best_red_hole is not None else 0.0
+    target_id = stabilizer.update(raw_target_id, raw_target_score, runner_up_score)
 
     for hole in holes:
         if hole["id"] == target_id:
