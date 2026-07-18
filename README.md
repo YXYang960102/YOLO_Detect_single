@@ -2,7 +2,7 @@
 
 Vision pipeline for the TEL 2026 robot project.
 
-This project detects `hole` targets with YOLOv8, assigns 4x3 hole IDs, detects the red LED scoring ring, and outputs a packet for Arduino:
+This project detects `hole` targets with YOLOv8, assigns 4x3 hole IDs, detects the red LED scoring ring, selects a reliable autonomous target, and outputs a packet for Arduino:
 
 ```text
 tx,ty,distance,target_id,valid
@@ -120,6 +120,19 @@ sudo usermod -a -G dialout $USER
 
 Log out and log back in after changing the group.
 
+## Autonomous Target Selection
+
+- A stable red target on top-row ID 1, 2, or 3 has first priority.
+- Without a reliable red target, the selector prefers a reliable large hole that needs less aiming movement.
+- A normal target must remain stable for several frames before `valid=1`.
+- Boxes touching the frame edge or below the general-target confidence threshold are rejected.
+- A locked normal target is retained while it remains reliable, preventing frame-to-frame target changes.
+- After all 12 holes are seen, a temporal grid tracker preserves IDs during gradual camera movement and vertical or horizontal cropping.
+- If fewer than three holes can be matched reliably after the board is remembered, the frame is rejected instead of guessing IDs.
+- The existing grid ID, geometry, and anchor-memory calculations in `hole_grid.py` run before this selection layer and are unchanged.
+
+For camera-only testing, press `s` to simulate one confirmed shot at the current target. After three simulated shots, that ID is excluded. Press `c` to clear all simulated shot counts. Real shot counting will require a confirmed ball-sensor message from Arduino.
+
 ## Run Notes
 
 Show the full target board once before testing partial views. The vision code remembers stable hole positions when enough holes are visible, then uses that memory only when the frame has very few holes left. Press `r` in the display window to reset the remembered grid after moving the camera a lot. Press `Esc` to close the display window.
@@ -143,5 +156,6 @@ runs/                            YOLO training/prediction output, not committed
 ## Notes
 
 - `distance` is currently `0` until the AccuPick3D depth stream is connected.
-- `valid=0` means no reliable red target is selected.
+- `valid=0` means neither a reliable red target nor a reliable normal target is selected.
+- The serial packet is repeated as a heartbeat even when its values do not change, allowing Arduino to detect a lost Jetson connection.
 - `runs/` and `venv/` should not be committed.

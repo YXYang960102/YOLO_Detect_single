@@ -3,10 +3,20 @@ import argparse
 import cv2
 from ultralytics import YOLO
 
-from config import CAMERA_INDEX, CONFIDENCE, IMAGE_SIZE, MODEL_PATH
+from config import (
+    CAMERA_INDEX,
+    CONFIDENCE,
+    IMAGE_SIZE,
+    MAX_SHOTS_PER_HOLE,
+    MODEL_PATH,
+    RED_SCORE_THRESHOLD,
+    RED_TARGET_IDS,
+)
+from grid_tracker import GridTracker
 from hole_grid import assign_ids, grid_memory_count, reset_grid_memory
 from red_target import TargetStabilizer, select_red_target
 from serial_tx import VisionSerial
+from target_manager import TARGET_NONE, TargetManager
 
 
 def build_holes(results):
@@ -39,7 +49,7 @@ def build_holes(results):
     return holes
 
 
-def draw_debug(frame, holes, target_hole, tx, ty, valid):
+def draw_debug(frame, holes, target_hole, tx, ty, valid, target_manager):
     height, width = frame.shape[:2]
     frame_center_x = width // 2
     frame_center_y = height // 2
@@ -50,12 +60,27 @@ def draw_debug(frame, holes, target_hole, tx, ty, valid):
     for hole in holes:
         hole_id = hole["id"]
         x1, y1, x2, y2 = hole["box"]
-        ring_x1, ring_y1, ring_x2, ring_y2 = hole["ring_box"]
         is_target = target_hole is not None and hole_id == target_hole["id"]
-        color = (0, 0, 255) if is_target else (0, 255, 0)
+        target_type = target_hole.get("target_type", TARGET_NONE) if is_target else TARGET_NONE
 
-        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.rectangle(frame, (ring_x1, ring_y1), (ring_x2, ring_y2), (0, 0, 180), 1)
+        if target_type == "red":
+            color = (0, 0, 255)
+        elif target_type == "normal":
+            color = (255, 255, 0)
+        else:
+            color = (0, 255, 0)
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+        if hole_id in RED_TARGET_IDS and hole["red_score"] >= RED_SCORE_THRESHOLD:
+            ring_x1, ring_y1, ring_x2, ring_y2 = hole["ring_box"]
+            cv2.rectangle(
+                frame,
+                (ring_x1, ring_y1),
+                (ring_x2, ring_y2),
+                (0, 0, 255),
+                2,
+            )
         cv2.circle(frame, (hole["cx"], hole["cy"]), 5, (0, 255, 0), -1)
         cv2.putText(
             frame,
@@ -68,6 +93,8 @@ def draw_debug(frame, holes, target_hole, tx, ty, valid):
         )
 
     target_id = target_hole["id"] if target_hole is not None else 0
+    target_type = target_hole.get("target_type", TARGET_NONE) if target_hole else TARGET_NONE
+    shots = target_manager.shots_for(target_id)
     id_mode = holes[0].get("id_mode", "-") if len(holes) > 0 else "-"
     cv2.putText(
         frame,
@@ -80,8 +107,17 @@ def draw_debug(frame, holes, target_hole, tx, ty, valid):
     )
     cv2.putText(
         frame,
-        f"TX:{tx} TY:{ty} Target:{target_id} Valid:{valid} Mem:{grid_memory_count()} ID:{id_mode}",
+        f"TX:{tx} TY:{ty} Target:{target_id} Type:{target_type} Valid:{valid}",
         (20, 80),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 255, 255),
+        2,
+    )
+    cv2.putText(
+        frame,
+        f"Shots:{shots}/{MAX_SHOTS_PER_HOLE} Mem:{grid_memory_count()} ID:{id_mode}",
+        (20, 110),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.7,
         (0, 255, 255),
@@ -103,6 +139,8 @@ def main():
     model = YOLO(MODEL_PATH)
     cap = cv2.VideoCapture(args.camera)
     stabilizer = TargetStabilizer()
+    grid_tracker = GridTracker()
+    target_manager = TargetManager()
     serial_tx = VisionSerial(port=args.serial_port, enabled=args.serial)
 
     while True:
@@ -117,7 +155,9 @@ def main():
 
         results = model(frame, imgsz=IMAGE_SIZE, conf=CONFIDENCE, verbose=False)
         holes = assign_ids(build_holes(results), width)
-        target_hole = select_red_target(frame, holes, stabilizer)
+        holes = grid_tracker.update(holes, frame=frame)
+        red_target = select_red_target(frame, holes, stabilizer)
+        target_hole = target_manager.select(holes, red_target, width, height)
 
         if target_hole is not None:
             tx = target_hole["cx"] - frame_center_x
@@ -135,7 +175,7 @@ def main():
         serial_tx.send(tx, ty, distance, target_id, valid)
 
         if not args.no_display:
-            draw_debug(frame, holes, target_hole, tx, ty, valid)
+            draw_debug(frame, holes, target_hole, tx, ty, valid, target_manager)
             cv2.imshow("Coordinate System", frame)
 
             key = cv2.waitKey(1) & 0xFF
@@ -144,6 +184,12 @@ def main():
                 break
             if key == ord("r"):
                 reset_grid_memory()
+                grid_tracker.reset()
+                target_manager.reset_tracking()
+            if key == ord("s") and target_hole is not None:
+                target_manager.record_shot(target_hole["id"])
+            if key == ord("c"):
+                target_manager.reset_shots()
 
     cap.release()
     cv2.destroyAllWindows()
