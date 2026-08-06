@@ -3,15 +3,34 @@ import argparse
 import cv2
 from ultralytics import YOLO
 
+from camera_source import create_camera
 from config import (
     CAMERA_INDEX,
+    CAMERA_SOURCE,
     CONFIDENCE,
+    DEPTH_DISTANCE_MODE,
+    DEPTH_MAD_SCALE,
+    DEPTH_MAX_MM,
+    DEPTH_MIN_MM,
+    DEPTH_MIN_VALID_FRACTION,
+    DEPTH_MIN_VALID_SAMPLES,
+    DEPTH_RING_INNER_RATIO,
+    DEPTH_RING_OUTER_RATIO,
+    DEPTH_SMOOTHING,
     IMAGE_SIZE,
     MAX_SHOTS_PER_HOLE,
     MODEL_PATH,
+    REALSENSE_ENABLE_EMITTER,
+    REALSENSE_FPS,
+    REALSENSE_HEIGHT,
+    REALSENSE_SERIAL,
+    REALSENSE_TIMEOUT_MS,
+    REALSENSE_WARMUP_FRAMES,
+    REALSENSE_WIDTH,
     RED_SCORE_THRESHOLD,
     RED_TARGET_IDS,
 )
+from depth_distance import DepthEstimator
 from grid_tracker import GridTracker
 from hole_grid import assign_ids, grid_memory_count, reset_grid_memory
 from red_target import TargetStabilizer, select_red_target
@@ -49,7 +68,17 @@ def build_holes(results):
     return holes
 
 
-def draw_debug(frame, holes, target_hole, tx, ty, valid, target_manager):
+def draw_debug(
+    frame,
+    holes,
+    target_hole,
+    tx,
+    ty,
+    distance,
+    valid,
+    target_manager,
+    depth_measurement=None,
+):
     height, width = frame.shape[:2]
     frame_center_x = width // 2
     frame_center_y = height // 2
@@ -107,10 +136,10 @@ def draw_debug(frame, holes, target_hole, tx, ty, valid, target_manager):
     )
     cv2.putText(
         frame,
-        f"TX:{tx} TY:{ty} Target:{target_id} Type:{target_type} Valid:{valid}",
+        f"TX:{tx} TY:{ty} Dist:{distance}mm Target:{target_id} Type:{target_type} Valid:{valid}",
         (20, 80),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.7,
+        0.65,
         (0, 255, 255),
         2,
     )
@@ -124,10 +153,61 @@ def draw_debug(frame, holes, target_hole, tx, ty, valid, target_manager):
         2,
     )
 
+    if depth_measurement is not None:
+        cv2.putText(
+            frame,
+            (
+                f"X:{depth_measurement.x_mm:.0f} Y:{depth_measurement.y_mm:.0f} "
+                f"Z:{depth_measurement.z_mm:.0f} Range:{depth_measurement.range_mm:.0f} mm"
+            ),
+            (20, 140),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (0, 255, 255),
+            2,
+        )
+        cv2.putText(
+            frame,
+            (
+                f"Depth samples:{depth_measurement.sample_count} "
+                f"valid:{depth_measurement.valid_fraction:.2f}"
+            ),
+            (20, 170),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (0, 255, 255),
+            2,
+        )
+    elif target_hole is not None:
+        cv2.putText(
+            frame,
+            "Depth: invalid / unavailable",
+            (20, 140),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (0, 165, 255),
+            2,
+        )
+
 
 def parse_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--model", default=MODEL_PATH)
+    parser.add_argument(
+        "--source",
+        choices=("realsense", "opencv"),
+        default=CAMERA_SOURCE,
+    )
     parser.add_argument("--camera", type=int, default=CAMERA_INDEX)
+    parser.add_argument("--realsense-serial", default=REALSENSE_SERIAL)
+    parser.add_argument("--width", type=int, default=REALSENSE_WIDTH)
+    parser.add_argument("--height", type=int, default=REALSENSE_HEIGHT)
+    parser.add_argument("--fps", type=int, default=REALSENSE_FPS)
+    parser.add_argument(
+        "--distance-mode",
+        choices=("range", "z"),
+        default=DEPTH_DISTANCE_MODE,
+    )
     parser.add_argument("--serial", action="store_true")
     parser.add_argument("--serial-port", default=None)
     parser.add_argument("--no-display", action="store_true")
@@ -136,63 +216,125 @@ def parse_args():
 
 def main():
     args = parse_args()
-    model = YOLO(MODEL_PATH)
-    cap = cv2.VideoCapture(args.camera)
+    model = YOLO(args.model)
+    camera = create_camera(
+        source=args.source,
+        camera_index=args.camera,
+        width=args.width,
+        height=args.height,
+        fps=args.fps,
+        serial_number=args.realsense_serial,
+        timeout_ms=REALSENSE_TIMEOUT_MS,
+        warmup_frames=REALSENSE_WARMUP_FRAMES,
+        enable_emitter=REALSENSE_ENABLE_EMITTER,
+    )
+    camera.print_info()
+
     stabilizer = TargetStabilizer()
     grid_tracker = GridTracker()
     target_manager = TargetManager()
+    depth_estimator = DepthEstimator(
+        min_mm=DEPTH_MIN_MM,
+        max_mm=DEPTH_MAX_MM,
+        inner_ratio=DEPTH_RING_INNER_RATIO,
+        outer_ratio=DEPTH_RING_OUTER_RATIO,
+        min_valid_samples=DEPTH_MIN_VALID_SAMPLES,
+        min_valid_fraction=DEPTH_MIN_VALID_FRACTION,
+        mad_scale=DEPTH_MAD_SCALE,
+        smoothing=DEPTH_SMOOTHING,
+    )
     serial_tx = VisionSerial(port=args.serial_port, enabled=args.serial)
 
-    while True:
-        ret, frame = cap.read()
+    try:
+        while True:
+            camera_frame = camera.read()
 
-        if not ret:
-            break
+            if camera_frame is None:
+                continue
 
-        height, width = frame.shape[:2]
-        frame_center_x = width // 2
-        frame_center_y = height // 2
+            frame = camera_frame.color
+            height, width = frame.shape[:2]
+            frame_center_x = width // 2
+            frame_center_y = height // 2
 
-        results = model(frame, imgsz=IMAGE_SIZE, conf=CONFIDENCE, verbose=False)
-        holes = assign_ids(build_holes(results), width)
-        holes = grid_tracker.update(holes, frame=frame)
-        red_target = select_red_target(frame, holes, stabilizer)
-        target_hole = target_manager.select(holes, red_target, width, height)
+            # Original detection / grid / tracking / red-target / target-manager
+            # algorithm is intentionally kept in the same order.
+            results = model(frame, imgsz=IMAGE_SIZE, conf=CONFIDENCE, verbose=False)
+            holes = assign_ids(build_holes(results), width)
+            holes = grid_tracker.update(holes, frame=frame)
+            red_target = select_red_target(frame, holes, stabilizer)
+            target_hole = target_manager.select(holes, red_target, width, height)
 
-        if target_hole is not None:
-            tx = target_hole["cx"] - frame_center_x
-            ty = target_hole["cy"] - frame_center_y
-            distance = 0
-            target_id = target_hole["id"]
-            valid = 1
-        else:
-            tx = 0
-            ty = 0
-            distance = 0
-            target_id = 0
-            valid = 0
+            depth_measurement = None
+            if target_hole is not None:
+                tx = target_hole["cx"] - frame_center_x
+                ty = target_hole["cy"] - frame_center_y
+                target_id = target_hole["id"]
 
-        serial_tx.send(tx, ty, distance, target_id, valid)
+                if camera_frame.depth_mm is not None:
+                    depth_measurement = depth_estimator.measure(
+                        camera_frame.depth_mm,
+                        target_hole["box"],
+                        (target_hole["cx"], target_hole["cy"]),
+                        camera_frame.intrinsics,
+                        target_id=target_id,
+                    )
 
-        if not args.no_display:
-            draw_debug(frame, holes, target_hole, tx, ty, valid, target_manager)
-            cv2.imshow("Coordinate System", frame)
+                    if depth_measurement is not None:
+                        distance_value = (
+                            depth_measurement.range_mm
+                            if args.distance_mode == "range"
+                            else depth_measurement.z_mm
+                        )
+                        distance = int(round(distance_value))
+                        valid = 1
+                    else:
+                        distance = 0
+                        valid = 0
+                else:
+                    # Preserve the original webcam behavior when no depth stream
+                    # exists: target coordinates are still valid, distance is 0.
+                    distance = 0
+                    valid = 1
+            else:
+                tx = 0
+                ty = 0
+                distance = 0
+                target_id = 0
+                valid = 0
 
-            key = cv2.waitKey(1) & 0xFF
+            serial_tx.send(tx, ty, distance, target_id, valid)
 
-            if key == 27:
-                break
-            if key == ord("r"):
-                reset_grid_memory()
-                grid_tracker.reset()
-                target_manager.reset_tracking()
-            if key == ord("s") and target_hole is not None:
-                target_manager.record_shot(target_hole["id"])
-            if key == ord("c"):
-                target_manager.reset_shots()
+            if not args.no_display:
+                draw_debug(
+                    frame,
+                    holes,
+                    target_hole,
+                    tx,
+                    ty,
+                    distance,
+                    valid,
+                    target_manager,
+                    depth_measurement,
+                )
+                cv2.imshow("Coordinate System RGB-D", frame)
 
-    cap.release()
-    cv2.destroyAllWindows()
+                key = cv2.waitKey(1) & 0xFF
+
+                if key == 27:
+                    break
+                if key == ord("r"):
+                    reset_grid_memory()
+                    grid_tracker.reset()
+                    target_manager.reset_tracking()
+                    depth_estimator.reset()
+                if key == ord("s") and target_hole is not None:
+                    target_manager.record_shot(target_hole["id"])
+                if key == ord("c"):
+                    target_manager.reset_shots()
+    finally:
+        camera.close()
+        cv2.destroyAllWindows()
 
 
 if __name__ == "__main__":

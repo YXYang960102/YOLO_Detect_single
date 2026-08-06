@@ -1,5 +1,8 @@
 MODEL_PATH = "weights/best.pt"
 
+# Camera input. Use "realsense" for the Solomon SLM SVRBP-0092C and
+# "opencv" when testing with a normal webcam.
+CAMERA_SOURCE = "realsense"
 CAMERA_INDEX = 0
 IMAGE_SIZE = 640
 CONFIDENCE = 0.35
@@ -30,3 +33,29 @@ RED_TARGET_IDS = (1, 2, 3)
 
 SERIAL_BAUD = 115200
 SERIAL_HEARTBEAT_SECONDS = 0.10
+
+# RGB-D distance estimation. All depth and serial distance values are mm.
+# The ring samples the board around a detected hole instead of the empty
+# center of the hole, which is normally more stable for this target.
+DEPTH_MIN_MM = 200
+DEPTH_MAX_MM = 8000
+DEPTH_RING_INNER_RATIO = 0.60
+DEPTH_RING_OUTER_RATIO = 1.10
+DEPTH_MIN_VALID_SAMPLES = 40
+DEPTH_MIN_VALID_FRACTION = 0.20
+DEPTH_MAD_SCALE = 3.5
+DEPTH_SMOOTHING = 0.25
+
+# "range" sends the straight-line camera-to-target distance.
+# "z" sends only the forward distance along the optical axis.
+DEPTH_DISTANCE_MODE = "range"
+DEPTH_DISPLAY_MAX_MM = 3000
+
+# Solomon SLM SVRBP-0092C is an Intel RealSense active-stereo camera.
+REALSENSE_WIDTH = 1280
+REALSENSE_HEIGHT = 720
+REALSENSE_FPS = 30
+REALSENSE_SERIAL = None
+REALSENSE_TIMEOUT_MS = 5000
+REALSENSE_WARMUP_FRAMES = 15
+REALSENSE_ENABLE_EMITTER = True
