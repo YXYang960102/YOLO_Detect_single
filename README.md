@@ -137,6 +137,22 @@ For camera-only testing, press `s` to simulate one confirmed shot at the current
 
 Show the full target board once before testing partial views. The vision code remembers stable hole positions when enough holes are visible, then uses that memory only when the frame has very few holes left. Press `r` in the display window to reset the remembered grid after moving the camera a lot. Press `Esc` to close the display window.
 
+With the RealSense source, distance is estimated from the aligned depth image.
+The primary sample is the board-surface ring around the selected hole. A second
+path can sample inside the hole when the ring is invalid, but it remains disabled
+while `DEPTH_HOLE_RECESS_MM` is `None`. Measure the signed recess on the real
+field before enabling it; the correction is:
+
+```text
+board_z_mm = hole_z_mm - DEPTH_HOLE_RECESS_MM
+```
+
+The debug overlay reports `Src:ring` or `Src:hole_fallback`. With RealSense,
+invalid depth forces `valid=0` so the controller does not act on a target with an
+unknown distance. A normal OpenCV webcam has no depth stream, so it preserves the
+camera-only test behavior: target coordinates may remain valid while distance is
+`0`.
+
 The old test entrypoint still works:
 
 ```bash
@@ -155,7 +171,8 @@ runs/                            YOLO training/prediction output, not committed
 
 ## Notes
 
-- `distance` is currently `0` until the AccuPick3D depth stream is connected.
+- `distance` is measured in millimetres from RealSense depth when available; it
+  remains `0` for an OpenCV webcam or an invalid depth estimate.
 - `valid=0` means neither a reliable red target nor a reliable normal target is selected.
 - The serial packet is repeated as a heartbeat even when its values do not change, allowing Arduino to detect a lost Jetson connection.
 - `runs/` and `venv/` should not be committed.

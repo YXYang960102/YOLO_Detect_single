@@ -46,6 +46,17 @@ DEPTH_MIN_VALID_FRACTION = 0.20
 DEPTH_MAD_SCALE = 3.5
 DEPTH_SMOOTHING = 0.25
 
+# Fallback when the outer-ring board-surface sample is unavailable or too
+# noisy (reflection, glare, partial occlusion): sample inside the hole
+# opening instead and correct with the field's fixed hole recess depth.
+# DEPTH_HOLE_RECESS_MM is a signed offset measured on the real field:
+#   z_board_mm = z_hole_mm - DEPTH_HOLE_RECESS_MM
+# (positive = the hole cavity reads farther from the camera than the board
+# face). Leave it None until measured on the actual field; the fallback
+# stays disabled with None instead of guessing a distance.
+DEPTH_HOLE_INNER_RATIO = 0.35
+DEPTH_HOLE_RECESS_MM = None
+
 # "range" sends the straight-line camera-to-target distance.
 # "z" sends only the forward distance along the optical axis.
 DEPTH_DISTANCE_MODE = "range"

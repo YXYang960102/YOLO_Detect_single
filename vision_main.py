@@ -9,6 +9,8 @@ from config import (
     CAMERA_SOURCE,
     CONFIDENCE,
     DEPTH_DISTANCE_MODE,
+    DEPTH_HOLE_INNER_RATIO,
+    DEPTH_HOLE_RECESS_MM,
     DEPTH_MAD_SCALE,
     DEPTH_MAX_MM,
     DEPTH_MIN_MM,
@@ -158,7 +160,8 @@ def draw_debug(
             frame,
             (
                 f"X:{depth_measurement.x_mm:.0f} Y:{depth_measurement.y_mm:.0f} "
-                f"Z:{depth_measurement.z_mm:.0f} Range:{depth_measurement.range_mm:.0f} mm"
+                f"Z:{depth_measurement.z_mm:.0f} Range:{depth_measurement.range_mm:.0f} mm "
+                f"Src:{depth_measurement.source}"
             ),
             (20, 140),
             cv2.FONT_HERSHEY_SIMPLEX,
@@ -242,6 +245,8 @@ def main():
         min_valid_fraction=DEPTH_MIN_VALID_FRACTION,
         mad_scale=DEPTH_MAD_SCALE,
         smoothing=DEPTH_SMOOTHING,
+        hole_inner_ratio=DEPTH_HOLE_INNER_RATIO,
+        hole_recess_mm=DEPTH_HOLE_RECESS_MM,
     )
     serial_tx = VisionSerial(port=args.serial_port, enabled=args.serial)
 
