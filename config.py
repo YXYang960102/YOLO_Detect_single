@@ -57,6 +57,23 @@ DEPTH_SMOOTHING = 0.25
 DEPTH_HOLE_INNER_RATIO = 0.35
 DEPTH_HOLE_RECESS_MM = None
 
+# Fallback when YOLO finds zero holes in a frame (too far, hole too small in
+# frame, poor lighting for RGB): detect candidate hole positions directly
+# from the depth image instead. A hole's net funnel reads farther than the
+# surrounding board face, or returns no depth (dark mesh material) -- both
+# count as evidence. Diameters are the field's physical hole sizes (main
+# 40cm, TLE bonus 20cm) with slack for measurement tolerance and off-angle
+# viewing. DEPTH_HOLE_DETECT_MIN_CONFIDENCE is set above GENERAL_TARGET_CONFIDENCE
+# (0.50) so depth-only candidates pass the existing target_manager reliability
+# check without changing that file.
+DEPTH_HOLE_DETECT_DOWNSAMPLE = 8
+DEPTH_HOLE_DETECT_DEVIATION_MM = 25.0
+DEPTH_HOLE_DETECT_MIN_DIAMETER_MM = 180.0
+DEPTH_HOLE_DETECT_MAX_DIAMETER_MM = 420.0
+DEPTH_HOLE_DETECT_DIAMETER_TOLERANCE = 0.45
+DEPTH_HOLE_DETECT_MIN_AREA_PX = 20
+DEPTH_HOLE_DETECT_MIN_CONFIDENCE = 0.55
+
 # "range" sends the straight-line camera-to-target distance.
 # "z" sends only the forward distance along the optical axis.
 DEPTH_DISTANCE_MODE = "range"

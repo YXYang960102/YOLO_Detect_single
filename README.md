@@ -153,6 +153,25 @@ unknown distance. A normal OpenCV webcam has no depth stream, so it preserves th
 camera-only test behavior: target coordinates may remain valid while distance is
 `0`.
 
+If YOLO finds zero holes in a frame (too far, hole too small in frame, poor
+lighting), `depth_hole_detector.py` looks for candidate hole positions directly
+in the depth image instead -- a hole's net funnel reads farther than the
+surrounding board face, or returns no depth at all, and either counts as
+evidence. Candidates are filtered by the field's physical hole diameters
+(main 40cm, TLE bonus 20cm) at the locally estimated distance. The debug
+overlay's `Det:` field shows `yolo` or `depth` per frame.
+
+**`Det:depth` is fully observation-only.** A depth-only detection has no
+RGB/YOLO evidence a real hole is there -- ordinary sensor dropout
+(reflection, noise, edge, out-of-range) looks identical to a hole to this
+detector. Depth-only candidates never reach the grid-ID memory, `GridTracker`,
+red-target stabilizer, or `TargetManager` -- they get display-only IDs
+(`build_observation_holes`) and are drawn straight to the debug overlay, so a
+noisy frame can never bias what a later YOLO frame locks onto. The serial
+packet for a depth-only frame is always the canonical neutral
+`(0, 0, 0, 0, 0)`. This stays true until a depth-specific quality gate is
+built from real RealSense captures.
+
 The old test entrypoint still works:
 
 ```bash

@@ -9,6 +9,13 @@ from config import (
     CAMERA_SOURCE,
     CONFIDENCE,
     DEPTH_DISTANCE_MODE,
+    DEPTH_HOLE_DETECT_DEVIATION_MM,
+    DEPTH_HOLE_DETECT_DIAMETER_TOLERANCE,
+    DEPTH_HOLE_DETECT_DOWNSAMPLE,
+    DEPTH_HOLE_DETECT_MAX_DIAMETER_MM,
+    DEPTH_HOLE_DETECT_MIN_AREA_PX,
+    DEPTH_HOLE_DETECT_MIN_CONFIDENCE,
+    DEPTH_HOLE_DETECT_MIN_DIAMETER_MM,
     DEPTH_HOLE_INNER_RATIO,
     DEPTH_HOLE_RECESS_MM,
     DEPTH_MAD_SCALE,
@@ -33,6 +40,7 @@ from config import (
     RED_TARGET_IDS,
 )
 from depth_distance import DepthEstimator
+from depth_hole_detector import DepthHoleDetector
 from grid_tracker import GridTracker
 from hole_grid import assign_ids, grid_memory_count, reset_grid_memory
 from red_target import TargetStabilizer, select_red_target
@@ -65,9 +73,72 @@ def build_holes(results):
                 "conf": conf,
                 "red_score": 0.0,
                 "ring_box": (x1, y1, x2, y2),
+                "detector": "yolo",
             })
 
     return holes
+
+
+def build_observation_holes(candidates):
+    """Assigns display-only IDs to depth-only candidates for the debug overlay.
+
+    Must never touch control-owned state: does not call assign_ids() (writes
+    hole_grid's module-level grid memory), GridTracker.update(),
+    select_red_target()/TargetStabilizer, or TargetManager.select(). A prior
+    depth-only frame must not be able to bias a later YOLO frame's target
+    selection. See docs/codex-handoff.md, 2026-08-19 Codex review.
+    """
+    holes = []
+    for index, candidate in enumerate(candidates, start=1):
+        hole = dict(candidate)
+        hole["id"] = index
+        hole["id_mode"] = "depth_observe"
+        holes.append(hole)
+    return holes
+
+
+def resolve_distance_and_validity(
+    target_hole,
+    depth_mm,
+    intrinsics,
+    depth_estimator,
+    distance_mode,
+):
+    """Returns (distance_mm, valid, depth_measurement) for the selected target.
+
+    Depth-only detections (no RGB/YOLO evidence a real hole is there) are
+    observation-only: ordinary sensor dropout looks identical to a hole to
+    that detector, so they must never drive valid=1 / serial output until a
+    depth-specific quality gate exists. See docs/codex-handoff.md, 2026-08-19
+    Codex review.
+    """
+    if target_hole is None:
+        return 0, 0, None
+
+    if target_hole.get("detector") == "depth":
+        return 0, 0, None
+
+    if depth_mm is None:
+        # Preserve the original webcam behavior when no depth stream exists:
+        # target coordinates are still valid, distance is 0.
+        return 0, 1, None
+
+    depth_measurement = depth_estimator.measure(
+        depth_mm,
+        target_hole["box"],
+        (target_hole["cx"], target_hole["cy"]),
+        intrinsics,
+        target_id=target_hole["id"],
+    )
+    if depth_measurement is None:
+        return 0, 0, None
+
+    distance_value = (
+        depth_measurement.range_mm
+        if distance_mode == "range"
+        else depth_measurement.z_mm
+    )
+    return int(round(distance_value)), 1, depth_measurement
 
 
 def draw_debug(
@@ -127,6 +198,7 @@ def draw_debug(
     target_type = target_hole.get("target_type", TARGET_NONE) if target_hole else TARGET_NONE
     shots = target_manager.shots_for(target_id)
     id_mode = holes[0].get("id_mode", "-") if len(holes) > 0 else "-"
+    detector_source = holes[0].get("detector", "-") if len(holes) > 0 else "-"
     cv2.putText(
         frame,
         f"Detected: {len(holes)}",
@@ -147,7 +219,8 @@ def draw_debug(
     )
     cv2.putText(
         frame,
-        f"Shots:{shots}/{MAX_SHOTS_PER_HOLE} Mem:{grid_memory_count()} ID:{id_mode}",
+        f"Shots:{shots}/{MAX_SHOTS_PER_HOLE} Mem:{grid_memory_count()} "
+        f"ID:{id_mode} Det:{detector_source}",
         (20, 110),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.7,
@@ -248,6 +321,17 @@ def main():
         hole_inner_ratio=DEPTH_HOLE_INNER_RATIO,
         hole_recess_mm=DEPTH_HOLE_RECESS_MM,
     )
+    depth_hole_detector = DepthHoleDetector(
+        min_mm=DEPTH_MIN_MM,
+        max_mm=DEPTH_MAX_MM,
+        downsample=DEPTH_HOLE_DETECT_DOWNSAMPLE,
+        deviation_min_mm=DEPTH_HOLE_DETECT_DEVIATION_MM,
+        min_diameter_mm=DEPTH_HOLE_DETECT_MIN_DIAMETER_MM,
+        max_diameter_mm=DEPTH_HOLE_DETECT_MAX_DIAMETER_MM,
+        diameter_tolerance=DEPTH_HOLE_DETECT_DIAMETER_TOLERANCE,
+        min_area_px=DEPTH_HOLE_DETECT_MIN_AREA_PX,
+        min_confidence=DEPTH_HOLE_DETECT_MIN_CONFIDENCE,
+    )
     serial_tx = VisionSerial(port=args.serial_port, enabled=args.serial)
 
     try:
@@ -265,48 +349,39 @@ def main():
             # Original detection / grid / tracking / red-target / target-manager
             # algorithm is intentionally kept in the same order.
             results = model(frame, imgsz=IMAGE_SIZE, conf=CONFIDENCE, verbose=False)
-            holes = assign_ids(build_holes(results), width)
-            holes = grid_tracker.update(holes, frame=frame)
-            red_target = select_red_target(frame, holes, stabilizer)
-            target_hole = target_manager.select(holes, red_target, width, height)
+            raw_holes = build_holes(results)
 
-            depth_measurement = None
-            if target_hole is not None:
-                tx = target_hole["cx"] - frame_center_x
-                ty = target_hole["cy"] - frame_center_y
-                target_id = target_hole["id"]
-
-                if camera_frame.depth_mm is not None:
-                    depth_measurement = depth_estimator.measure(
-                        camera_frame.depth_mm,
-                        target_hole["box"],
-                        (target_hole["cx"], target_hole["cy"]),
-                        camera_frame.intrinsics,
-                        target_id=target_id,
-                    )
-
-                    if depth_measurement is not None:
-                        distance_value = (
-                            depth_measurement.range_mm
-                            if args.distance_mode == "range"
-                            else depth_measurement.z_mm
-                        )
-                        distance = int(round(distance_value))
-                        valid = 1
-                    else:
-                        distance = 0
-                        valid = 0
-                else:
-                    # Preserve the original webcam behavior when no depth stream
-                    # exists: target coordinates are still valid, distance is 0.
-                    distance = 0
-                    valid = 1
+            if len(raw_holes) == 0 and camera_frame.depth_mm is not None:
+                # Observation-only: depth-only candidates must never reach
+                # control-owned state (grid memory, GridTracker, red
+                # stabilizer, TargetManager, depth smoothing, shot counts),
+                # so a noisy frame here can never bias a later YOLO frame's
+                # target selection. Draw them, but always send the canonical
+                # neutral packet. See docs/codex-handoff.md, 2026-08-19
+                # Codex review.
+                depth_candidates = depth_hole_detector.detect(
+                    camera_frame.depth_mm, camera_frame.intrinsics
+                )
+                holes = build_observation_holes(depth_candidates)
+                target_hole = None
+                depth_measurement = None
+                tx, ty, distance, target_id, valid = 0, 0, 0, 0, 0
             else:
-                tx = 0
-                ty = 0
-                distance = 0
-                target_id = 0
-                valid = 0
+                holes = assign_ids(raw_holes, width)
+                holes = grid_tracker.update(holes, frame=frame)
+                red_target = select_red_target(frame, holes, stabilizer)
+                target_hole = target_manager.select(holes, red_target, width, height)
+
+                target_id = target_hole["id"] if target_hole is not None else 0
+                tx = target_hole["cx"] - frame_center_x if target_hole is not None else 0
+                ty = target_hole["cy"] - frame_center_y if target_hole is not None else 0
+                distance, valid, depth_measurement = resolve_distance_and_validity(
+                    target_hole,
+                    camera_frame.depth_mm,
+                    camera_frame.intrinsics,
+                    depth_estimator,
+                    args.distance_mode,
+                )
 
             serial_tx.send(tx, ty, distance, target_id, valid)
 
