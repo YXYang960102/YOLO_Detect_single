@@ -1,0 +1,19 @@
+[Unit]
+Description=YOLO RealSense vision with Mega UART gate
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=jeremy
+WorkingDirectory=/home/jeremy/RobotAI/YOLO_Detect_single
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/jeremy/RobotAI/YOLO_Detect_single/venv/bin/python /home/jeremy/RobotAI/YOLO_Detect_single/test_coordinate.py --source realsense --serial --serial-port /dev/ttyTHS1 --wait-for-mega --no-display
+Restart=on-failure
+RestartSec=2
+KillSignal=SIGINT
+SuccessExitStatus=SIGINT 130
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

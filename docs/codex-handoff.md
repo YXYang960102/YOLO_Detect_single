@@ -926,3 +926,248 @@ changed in this repo, session by session. Newest entry at the bottom.
   Codex specified: lock a YOLO target, run depth-observation frames, assert
   the returning YOLO target needs 3 fresh stable frames again before
   `valid=1`.
+
+---
+
+## 2026-08-22 — Codex: Orin standby and Mega UART power-gated startup
+
+**User Request**
+- Jeremy explained that Orin Nano has independent power and communicates with
+  Arduino Mega over RX/TX UART. Orin must be powered before the competition's
+  45-second loading window, remain at low application workload while Mega is
+  off, and begin vision only after Mega powers and boots.
+- Jeremy accepted responsibility for the electrical implementation, explicitly
+  approved the software implementation, assigned Codex the Orin project, and
+  said Claude would simultaneously implement the TEL/Mega side.
+
+**Discussion Result**
+- Added an opt-in `--wait-for-mega` competition mode. Ordinary camera tests keep
+  their prior immediate-start behavior.
+- Version-1 UART messages are newline-delimited ASCII at 115200 baud. Orin
+  accepts `MEGA_READY,1` and `MEGA_HEARTBEAT,1`; it transmits
+  `VISION_STANDBY,1`, `VISION_STARTING,1`, `VISION_READY,1`, or
+  `VISION_ERROR,1`. The existing numeric target packet remains exactly
+  `tx,ty,distance,target_id,valid`.
+- Orin does not import Ultralytics/PyTorch, create the YOLO model, or start the
+  RealSense pipeline until a valid Mega heartbeat arrives. It performs one
+  inference warm-up before announcing `VISION_READY`.
+- A 1.0-second Mega-heartbeat timeout ends the current camera/model session,
+  clears per-session tracking, releases the camera/model/CUDA cache, and returns
+  to `WAIT_MEGA`.
+
+**Why**
+- UART device presence cannot represent Mega power because the Orin header UART
+  remains present while Mega is off; an application-level heartbeat is the
+  observable power/runtime signal.
+- Making the mode opt-in prevents this competition startup policy from blocking
+  existing standalone RealSense/webcam tests.
+- A version field prevents silently accepting an incompatible future protocol,
+  and repeated heartbeats recover from a boot message missed while Orin was not
+  reading.
+- Loading the model and camera after the heartbeat removes the large, ongoing
+  vision workload during the pre-match standby period while keeping Linux ready.
+
+**Changed**
+- `vision_main.py`: moved the Ultralytics import and all heavy initialization
+  behind `run_vision_session()`; added the outer `WAIT_MEGA → STARTING → ACTIVE`
+  lifecycle, first-inference warm-up, heartbeat-loss cleanup, and CLI validation.
+- `serial_tx.py`: changed one-shot transmit-only serial handling into a
+  reconnecting bidirectional controller link while preserving `VisionSerial.send()`
+  and the existing target schema.
+- `config.py`: centralized protocol version, reconnect interval, standby poll
+  interval, and Mega heartbeat timeout.
+- `README.md`: documented the competition command, exact message contract,
+  timeout behavior, and state flow.
+
+**Added**
+- CLI flag `--wait-for-mega`; it requires `--serial` and `--serial-port`.
+- Incoming line buffering that tolerates partial UART reads, ignores malformed
+  lines and wrong protocol versions, and accepts extra future fields after the
+  version.
+- Connection retry after an unavailable/disconnected serial port instead of
+  permanently disabling serial output.
+- Six new serial tests covering versioned ready/timeout, wrong versions and
+  extra fields, partial lines, shared status/data UART output, lightweight wait,
+  and reconnect after initial failure.
+
+**Flow**
+- `test_coordinate.py` → `vision_main.main()` → construct lightweight
+  `VisionSerial` → `wait_for_mega()` polls UART → valid Mega version-1 heartbeat
+  → `run_vision_session()` imports/loads YOLO and starts RealSense → first frame
+  inference warm-up → `VISION_READY,1` → unchanged vision target pipeline →
+  unchanged five-field numeric UART packet.
+- If no valid heartbeat remains current, the session exits through `finally`,
+  closes RealSense, destroys display windows, releases model references/CUDA
+  cache, and the outer loop returns to UART-only waiting.
+
+**Calculation**
+- Standby poll interval is `0.02 s`, so the monitor checks at up to
+  `1 / 0.02 = 50 Hz` without a busy loop.
+- Mega timeout is `1.0 s`: `alive = now - last_valid_heartbeat <= 1.0 s`.
+  Example: a heartbeat read at `12.4 s` remains valid through `13.4 s`; at
+  `13.41 s` it is stale and the vision session returns to standby.
+- Status and unchanged numeric packet heartbeat interval remains `0.10 s`
+  (10 Hz). Distance units and coordinate signs are unchanged: `tx`/`ty` remain
+  pixel offsets, `distance` remains millimetres, and `valid` remains `0` or `1`.
+
+**Impact**
+- Affected producer: Orin UART/vision process. Affected consumer: Claude's
+  TEL/Mega Vision receiver, which must distinguish alphabetic lifecycle lines
+  from strict five-field numeric data and repeat its heartbeat.
+- Existing `python test_coordinate.py --source realsense` behavior is unchanged;
+  competition gating requires the new flags and the verified Jetson UART path.
+- YOLO target choice, depth formulas, grid IDs, red-target priority, and the
+  deliberately deferred target-loss reset issue were not changed.
+- The application releases vision work after link loss, but this is not Linux
+  suspend and does not claim zero Orin base-system power.
+
+**Evidence**
+- `venv/bin/python -m unittest discover -s tests -v`: 38/38 passed.
+- Python compilation passed for `config.py`, `serial_tx.py`, `vision_main.py`,
+  and `tests/test_serial_tx.py`, with bytecode cache routed to `/private/tmp`.
+- Import-only check confirmed both `ultralytics` and `torch` remain unloaded
+  after importing `vision_main` in standby-capable code.
+- CLI rejected `--wait-for-mega` without `--serial`, and rejected it without an
+  explicit `--serial-port`; `--help` showed the new option.
+- `git diff --check` passed.
+- No Jetson UART, Arduino Mega, RealSense restart, wattage, startup-time, or
+  energized-robot test was performed on this Mac.
+
+**Next Test**
+- After Claude matches the Mega side to the version-1 message contract, run on
+  Orin with the real UART path, for example:
+  `python test_coordinate.py --source realsense --serial --serial-port /dev/ttyTHS1 --wait-for-mega`.
+- With outputs disabled, verify: Orin stays at `WAIT_MEGA` while Mega is off;
+  Mega heartbeats trigger one startup; terminal time to `VISION_READY` is well
+  under 45 seconds; unplugging or powering down Mega closes RealSense within the
+  timeout path; repeated Mega power cycles restart vision cleanly. Measure Orin
+  standby and active power rather than inferring power savings from software
+  tests.
+
+---
+
+## 2026-08-22 — Codex: Two-layer RealSense and process recovery
+
+**User Request**
+- Claude identified that one RealSense `wait_for_frames()` timeout currently
+  propagates through `run_vision_session()`, sends `VISION_ERROR,1`, and kills
+  the Python process, while the repository had no supervisor to restart it.
+- Jeremy asked Codex and Claude to discuss the tradeoff, then explicitly chose
+  and approved two-layer recovery.
+
+**Discussion Result**
+- Recoverable camera/session faults are handled inside the running Python
+  process. The failed RealSense pipeline is closed and reopened while the
+  already-loaded YOLO model remains alive.
+- Camera recovery is bounded. The default permits 3 reopen attempts separated
+  by 1.0 seconds. A fourth consecutive failure exits non-zero for systemd.
+- Model loading, CUDA/inference, invalid configuration, and unexpected software
+  errors remain fatal so they are not hidden in an endless camera loop.
+- `VISION_ERROR,1` now means vision output is unavailable, whether recovery is
+  in progress or a fatal process exit is pending. A later `VISION_READY,1` is
+  required before Mega may use vision again.
+- A rate-limited example systemd service supplies the process-level layer with
+  `Restart=on-failure` and `RestartSec=2`. It is documentation only and has not
+  been installed or enabled on Orin.
+
+**Why**
+- Restarting an entire process for a temporary USB/frame timeout unnecessarily
+  reloads YOLO and CUDA, increasing recovery time during a match.
+- Retrying all exceptions forever would hide corrupt weights, CUDA failures,
+  programming bugs, or persistent hardware faults. Bounded camera recovery plus
+  an external supervisor gives each failure class an explicit owner.
+- Claude confirmed the TEL/Mega implementation already permits shooter output
+  only while `Vision::isVisionReady()` is true. Therefore ERROR-as-unavailable
+  is compatible with the existing Mega-side gate and requires no protocol
+  version change.
+
+**Changed**
+- `camera_source.py`: added typed recoverable camera exceptions; RealSense
+  missing-device, stream-start, initialization/warm-up, wait, alignment, and
+  frame-access failures now cross a defined recoverable boundary. A partially
+  started pipeline is stopped during constructor failure, and cleanup stop
+  errors do not mask the original fault.
+- `vision_main.py`: added an outer camera-session loop, bounded recovery policy,
+  error backoff, immediate safe-output transition, per-camera tracking reset,
+  first-inference re-warm, and fatal escalation after retry exhaustion. The YOLO
+  model is created once per Mega-powered vision session and retained through
+  camera-only recovery. Headless mode skips OpenCV window cleanup so a headless
+  build cannot mask the original recovery result.
+- `serial_tx.py`: `send(..., force=True)` can bypass unchanged-packet heartbeat
+  suppression so the neutral packet is written immediately on a camera fault.
+- `config.py`: added camera retry count, retry delay, and stable-period reset
+  constants.
+- `README.md`: corrected `VISION_ERROR` semantics and documented the recovery
+  state flow, timing bound, safe Mega behavior, and systemd deployment link.
+
+**Added**
+- `tests/test_vision_recovery.py`: policy exhaustion/reset, backoff/status,
+  Mega-loss during recovery, RealSense exception wrapping, model retention,
+  camera reopening, forced neutral output, and fatal escalation tests.
+- `deploy/yolo-vision.service.example`: editable Orin service using the gated
+  RealSense command, failure restart, 2-second delay, and 5-starts/60-seconds
+  limiter.
+- `deploy/README.md`: install, observe, enable, stop, and validation guidance.
+
+**Flow**
+- `ACTIVE` camera exception → force `0,0,0,0,0` → `VISION_ERROR,1` → close
+  camera → wait 1 second while keeping ERROR fresh and checking Mega heartbeat
+  → create a fresh camera and fresh tracking/depth state → first inference →
+  `VISION_READY,1` → `ACTIVE`.
+- If Mega disappears during recovery, the model session exits normally to
+  `WAIT_MEGA`; it does not reopen the camera for an unpowered controller.
+- If the fourth consecutive camera failure occurs, or a non-camera fatal error
+  occurs, Python exits non-zero. Once installed on Orin, systemd waits 2 seconds
+  and restarts the same `--wait-for-mega` process, which returns to UART standby
+  unless a valid Mega heartbeat is present.
+
+**Calculation**
+- `CAMERA_RECOVERY_MAX_ATTEMPTS = 3`: failure 1, 2, and 3 each permit a reopen;
+  failure 4 raises `VisionRecoveryExhaustedError`.
+- `CAMERA_RECOVERY_RESET_SECONDS = 10.0`: if the most recent active camera
+  session ran for at least 10 seconds before failing, its failure becomes count
+  1 of a fresh sequence.
+- `REALSENSE_TIMEOUT_MS = 5000` and 1-second recovery delay give a detection and
+  delay bound of about `5 + 1 = 6 seconds`, before adding pipeline warm-up and
+  first-inference time. Those latter terms must be measured on Orin.
+- The example supervisor waits 2 seconds after fatal exit and rate-limits to 5
+  starts per 60 seconds. These are initial bench-test values, not field-proven
+  constants.
+
+**Impact**
+- Target coordinates, distance units/formulas, grid IDs, red-target priority,
+  shot tracking, and the five-field packet schema are unchanged.
+- All target/depth/tracking state is intentionally reset after camera reopen so
+  stale detections cannot survive a broken stream. Only the model/CUDA weights
+  remain resident.
+- Mega receives both lifecycle ERROR and a forced neutral numeric packet. It
+  must remain safe until READY, even if a stale target packet was buffered.
+- The systemd file contains deployment-specific user, path, UART, and headless
+  assumptions and must be edited and verified on the actual Orin.
+
+**Evidence**
+- `venv/bin/python -m unittest discover -s tests -v`: 46/46 passed.
+- Python compilation passed for the changed runtime and test modules with the
+  bytecode cache routed to `/private/tmp`.
+- A fresh-process import check confirmed importing `vision_main` still imports
+  neither `ultralytics` nor `torch`, preserving low-workload `WAIT_MEGA`.
+- Static checks confirmed the example service contains `Restart=on-failure`,
+  `RestartSec=2`, 5/60 start limiting, and the gated headless command.
+- The example deliberately does not order itself after `multi-user.target`; it
+  is enabled by that target without introducing a reverse ordering relation.
+- `git diff --check` passed.
+- No RealSense disconnect, Orin CUDA/model retention, UART, Mega, systemd,
+  process-crash restart, startup-time, or energized-mechanism test was possible
+  on this Mac. `systemd-analyze` was not available here.
+
+**Next Test**
+- On Orin with mechanisms made safe, start the command manually and unplug the
+  RealSense USB cable during ACTIVE. Verify immediate neutral/ERROR, bounded
+  retries, model retention in logs, and READY only after reconnect and first
+  inference.
+- Test four consecutive camera failures to confirm non-zero process exit. Then
+  edit/install the service example and repeat to confirm the 2-second systemd
+  restart returns to WAIT_MEGA or ACTIVE according to the Mega heartbeat.
+- Measure actual timeout, warm-up, first-inference, and fatal-restart durations;
+  tune the 5-second frame timeout, 1-second camera delay, retry budget, and
+  systemd limiter only from that evidence.

@@ -7,6 +7,18 @@ import numpy as np
 from depth_distance import CameraIntrinsics
 
 
+class RecoverableCameraError(RuntimeError):
+    """Camera hardware/session failure that may succeed after reopening."""
+
+
+class CameraUnavailableError(RecoverableCameraError):
+    """Camera device or requested stream is temporarily unavailable."""
+
+
+class CameraReadError(RecoverableCameraError):
+    """An active camera session failed while waiting for or aligning a frame."""
+
+
 @dataclass
 class CameraFrame:
     color: np.ndarray
@@ -20,7 +32,9 @@ class OpenCVCamera:
         self.index = int(index)
         self.capture = cv2.VideoCapture(self.index)
         if not self.capture.isOpened():
-            raise RuntimeError(f"cannot open OpenCV camera index {self.index}")
+            raise CameraUnavailableError(
+                f"cannot open OpenCV camera index {self.index}"
+            )
 
     def read(self):
         ok, color = self.capture.read()
@@ -78,7 +92,7 @@ class RealSenseCamera:
         context = rs.context()
         devices = list(context.query_devices())
         if not devices:
-            raise RuntimeError(
+            raise CameraUnavailableError(
                 "no RealSense device found; check USB 3 cable, power, udev rules, "
                 "and run rs-enumerate-devices"
             )
@@ -95,7 +109,7 @@ class RealSenseCamera:
                     self._device_info(device, rs.camera_info.serial_number)
                     for device in devices
                 ]
-                raise RuntimeError(
+                raise CameraUnavailableError(
                     f"RealSense serial {serial_number} was not found; detected {detected}"
                 )
 
@@ -120,35 +134,48 @@ class RealSenseCamera:
         try:
             self.profile = self.pipeline.start(config)
         except RuntimeError as exc:
-            raise RuntimeError(
+            raise CameraUnavailableError(
                 f"cannot start RealSense at {self.width}x{self.height}@{self.fps}; "
                 "verify the camera profile with realsense-viewer"
             ) from exc
 
-        self.device = self.profile.get_device()
-        self.depth_sensor = self.device.first_depth_sensor()
-        self.depth_scale_mm = float(self.depth_sensor.get_depth_scale()) * 1000.0
-        self.align = rs.align(rs.stream.color)
+        try:
+            self.device = self.profile.get_device()
+            self.depth_sensor = self.device.first_depth_sensor()
+            self.depth_scale_mm = (
+                float(self.depth_sensor.get_depth_scale()) * 1000.0
+            )
+            self.align = rs.align(rs.stream.color)
 
-        if enable_emitter is not None:
+            if enable_emitter is not None:
+                try:
+                    if self.depth_sensor.supports(rs.option.emitter_enabled):
+                        self.depth_sensor.set_option(
+                            rs.option.emitter_enabled,
+                            1.0 if enable_emitter else 0.0,
+                        )
+                except RuntimeError as exc:
+                    print(f"Warning: could not change IR emitter state: {exc}")
+
+            color_profile = self.profile.get_stream(
+                rs.stream.color
+            ).as_video_stream_profile()
+            intr = color_profile.get_intrinsics()
+            self.intrinsics = self._convert_intrinsics(intr)
+
+            # Discard initial auto-exposure frames before measurements are used.
+            for _ in range(max(0, int(warmup_frames))):
+                self.pipeline.wait_for_frames(timeout_ms=self.timeout_ms)
+        except RuntimeError as exc:
             try:
-                if self.depth_sensor.supports(rs.option.emitter_enabled):
-                    self.depth_sensor.set_option(
-                        rs.option.emitter_enabled,
-                        1.0 if enable_emitter else 0.0,
-                    )
-            except RuntimeError as exc:
-                print(f"Warning: could not change IR emitter state: {exc}")
-
-        color_profile = self.profile.get_stream(
-            rs.stream.color
-        ).as_video_stream_profile()
-        intr = color_profile.get_intrinsics()
-        self.intrinsics = self._convert_intrinsics(intr)
-
-        # Discard initial auto-exposure frames before measurements are used.
-        for _ in range(max(0, int(warmup_frames))):
-            self.pipeline.wait_for_frames(timeout_ms=self.timeout_ms)
+                self.pipeline.stop()
+            except RuntimeError:
+                pass
+            self._closed = True
+            raise CameraReadError(
+                "RealSense initialization or warm-up failed "
+                f"within the {self.timeout_ms} ms frame timeout"
+            ) from exc
 
     @staticmethod
     def _device_info(device, field):
@@ -173,30 +200,39 @@ class RealSenseCamera:
         )
 
     def read(self):
-        frames = self.pipeline.wait_for_frames(timeout_ms=self.timeout_ms)
-        aligned = self.align.process(frames)
-        color_frame = aligned.get_color_frame()
-        depth_frame = aligned.get_depth_frame()
-        if not color_frame or not depth_frame:
-            return None
+        try:
+            frames = self.pipeline.wait_for_frames(timeout_ms=self.timeout_ms)
+            aligned = self.align.process(frames)
+            color_frame = aligned.get_color_frame()
+            depth_frame = aligned.get_depth_frame()
+            if not color_frame or not depth_frame:
+                raise CameraReadError(
+                    "RealSense frameset did not contain both color and depth"
+                )
 
-        color = np.asanyarray(color_frame.get_data())
-        depth_mm = (
-            np.asanyarray(depth_frame.get_data()).astype(np.float32)
-            * self.depth_scale_mm
-        )
+            color = np.asanyarray(color_frame.get_data())
+            depth_mm = (
+                np.asanyarray(depth_frame.get_data()).astype(np.float32)
+                * self.depth_scale_mm
+            )
 
-        # Because depth is aligned to color, the pixel coordinates and
-        # intrinsics used by YOLO are the color-camera coordinates.
-        intr = color_frame.profile.as_video_stream_profile().get_intrinsics()
-        intrinsics = self._convert_intrinsics(intr)
+            # Because depth is aligned to color, the pixel coordinates and
+            # intrinsics used by YOLO are the color-camera coordinates.
+            intr = color_frame.profile.as_video_stream_profile().get_intrinsics()
+            intrinsics = self._convert_intrinsics(intr)
 
-        return CameraFrame(
-            color=color,
-            depth_mm=depth_mm,
-            intrinsics=intrinsics,
-            timestamp_ms=float(color_frame.get_timestamp()),
-        )
+            return CameraFrame(
+                color=color,
+                depth_mm=depth_mm,
+                intrinsics=intrinsics,
+                timestamp_ms=float(color_frame.get_timestamp()),
+            )
+        except CameraReadError:
+            raise
+        except RuntimeError as exc:
+            raise CameraReadError(
+                f"RealSense frame read failed after {self.timeout_ms} ms"
+            ) from exc
 
     def info(self) -> Dict[str, object]:
         rs = self.rs
@@ -228,7 +264,10 @@ class RealSenseCamera:
 
     def close(self):
         if not self._closed:
-            self.pipeline.stop()
+            try:
+                self.pipeline.stop()
+            except RuntimeError as exc:
+                print(f"Warning: RealSense stop failed during cleanup: {exc}")
             self._closed = True
 
 

@@ -112,6 +112,17 @@ Run with serial output:
 python3 vision_main.py --serial --serial-port /dev/ttyUSB0
 ```
 
+For the competition power sequence, keep Orin powered and wait for the Mega
+UART heartbeat before loading YOLO or starting RealSense:
+
+```bash
+python3 test_coordinate.py --source realsense \
+  --serial --serial-port /dev/ttyTHS1 --wait-for-mega
+```
+
+`/dev/ttyTHS1` is an example Jetson header-UART device name. Replace it with
+the UART device verified on the deployed Orin.
+
 On some Linux systems, the user must be added to the serial device group before using `/dev/ttyUSB0` or `/dev/ttyACM0`:
 
 ```bash
@@ -119,6 +130,70 @@ sudo usermod -a -G dialout $USER
 ```
 
 Log out and log back in after changing the group.
+
+## Orin / Mega Power-Gated Startup
+
+`--wait-for-mega` is opt-in so ordinary webcam and RealSense tests retain their
+existing immediate-start behavior. It requires both `--serial` and an explicit
+`--serial-port`.
+
+The UART is ASCII, newline-delimited, 115200 baud, protocol version `1`:
+
+| Direction | Message | Meaning |
+| --- | --- | --- |
+| Mega → Orin | `MEGA_READY,1` | Mega completed safe firmware initialization. |
+| Mega → Orin | `MEGA_HEARTBEAT,1` | Mega is still powered and running. |
+| Orin → Mega | `VISION_STANDBY,1` | Orin is waiting without a model or camera stream. |
+| Orin → Mega | `VISION_STARTING,1` | Orin is loading/warming the model and camera. |
+| Orin → Mega | `VISION_READY,1` | Warm-up completed; vision packets may be consumed. |
+| Orin → Mega | `VISION_ERROR,1` | Vision output is unavailable; recovery is running or a fatal exit is pending. |
+| Orin → Mega | `tx,ty,distance,target_id,valid` | Existing target packet, unchanged. |
+
+Mega should repeat `MEGA_READY,1` or `MEGA_HEARTBEAT,1`; a one-time boot line
+can be missed if Orin opens the UART later. Orin polls at 20 ms intervals while
+waiting and treats the Mega link as lost after 1.0 s without a valid version-1
+heartbeat. For example, if the last heartbeat was received at `12.4 s`, the
+session remains active through `13.4 s`; after that it closes RealSense,
+releases the model/CUDA cache, clears vision tracking state, and returns to
+`WAIT_MEGA`.
+
+The state flow is:
+
+```text
+WAIT_MEGA --MEGA_READY/HEARTBEAT--> STARTING --warm-up--> ACTIVE
+ACTIVE --1.0 s heartbeat timeout--> WAIT_MEGA
+ACTIVE --recoverable camera error--> ERROR --reopen succeeds--> ACTIVE
+ERROR --camera retries exhausted/fatal error--> process exit --> systemd restart
+```
+
+During `WAIT_MEGA`, `ultralytics`, PyTorch/CUDA, the YOLO model, and the
+RealSense pipeline are not loaded or started. Linux and the lightweight Python
+UART monitor remain running. The measured Mega-power-on to `VISION_READY` time
+is printed to the terminal and must be confirmed on the real Orin against the
+45-second competition loading window.
+
+### Two-layer vision recovery
+
+A recoverable RealSense open, warm-up, frame-wait, alignment, or frame-access
+error immediately forces the neutral numeric packet `0,0,0,0,0`, announces
+`VISION_ERROR,1`, closes the failed camera pipeline, and reopens it without
+reloading the YOLO model. Per-camera tracking and depth state are rebuilt. The
+default policy allows 3 reopen attempts with a 1.0-second delay; after at least
+10 seconds of stable active operation, the consecutive-failure count resets.
+
+The fourth consecutive camera failure raises a fatal error and exits non-zero.
+Model loading, CUDA/inference, configuration, and unexpected programming errors
+also remain fatal instead of being mistaken for camera faults. A systemd
+service can then provide process-level recovery. The repository includes an
+editable [deployment example](deploy/README.md), but does not install or enable
+it automatically.
+
+With the current 5000 ms RealSense frame timeout, one missing-frame failure can
+take up to about 5 seconds to be detected before the 1-second reopen delay,
+camera exposure warm-up, and first inference. `VISION_READY,1` is sent again
+only after that first inference succeeds. The Mega must treat every
+`VISION_ERROR,1` as invalid output and keep actuators using its safe behavior
+until a later `VISION_READY,1` arrives.
 
 ## Autonomous Target Selection
 
