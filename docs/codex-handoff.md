@@ -1171,3 +1171,384 @@ changed in this repo, session by session. Newest entry at the bottom.
 - Measure actual timeout, warm-up, first-inference, and fatal-restart durations;
   tune the 5-second frame timeout, 1-second camera delay, retry budget, and
   systemd limiter only from that evidence.
+
+---
+
+## 2026-08-24 — Codex: Printed-board depth intermittency diagnosis
+
+**User Request**
+- Jeremy ran the current RealSense/YOLO pipeline on Orin through SSH/XQuartz.
+  YOLO detected nearly all printed holes, but most frames reported no distance;
+  Jeremy asked whether the flat 2D paper target caused it.
+
+**Discussion Result**
+- A flat paper target does not inherently invalidate the primary distance path:
+  the estimator samples the board-surface ring around the YOLO box, so a flat
+  matte plane can provide a valid distance.
+- The screenshots prove intermittent depth quality, not failed YOLO detection.
+  One close frame passed at `Z=878 mm`, `Range=900 mm`, `2564` robust samples,
+  and `0.79` valid fraction. A farther/smaller frame still detected 11 YOLO
+  holes but the selected target produced `Depth: invalid / unavailable` and
+  therefore `Dist=0`, `Valid=0`.
+- Likely contributors are the small printed target at distance, glossy/inked
+  paper infrared response, strong backlighting/ambient infrared, handheld
+  motion/curvature, and a shrinking ring region. The screenshots alone cannot
+  identify which one dominates.
+- Do not lower safety thresholds from these screenshots. First compare raw
+  aligned depth on the black print, white circle, and a matte rigid board at the
+  same distance and save close-valid/far-invalid captures.
+
+**Why**
+- The ring accepts only finite depth from `200..8000 mm`, needs at least 40
+  samples and 20% valid pixels, then applies a median/MAD outlier filter and
+  still requires 40 samples. Returning no measurement correctly forces
+  `valid=0`; weakening those gates could convert stereo dropouts into robot-valid
+  distance.
+- The paper mock-up has no real recessed opening. Thus it cannot exercise the
+  calibrated inner-hole fallback, which is also intentionally disabled while
+  `DEPTH_HOLE_RECESS_MM=None`. That is an indirect limitation of the 2D target,
+  not the reason the primary ring must fail.
+
+**Changed / Added**
+- No runtime code, threshold, calibration, dependency, or Git state changed.
+  This entry records real Orin/RealSense evidence and a discriminating test.
+
+**Calculation / Example**
+- Primary sample region is normalized elliptical radius `0.60..1.10` around the
+  YOLO box. A candidate depth is valid only in `200..8000 mm`.
+- Quality requires `valid_count >= 40` and
+  `valid_fraction = valid_count / ring_pixel_count >= 0.20` before and after
+  robust outlier rejection.
+- The successful screenshot reports `valid_fraction=0.79`, which exceeds the
+  `0.20` requirement by `0.59`, and `2564` samples, which exceeds 40 by 2524.
+  Its 3D range is computed as `sqrt(X^2 + Y^2 + Z^2)`; with displayed
+  `X=-186`, `Y=68`, `Z=878 mm`, the result is about `900 mm`, matching overlay.
+
+**Impact**
+- YOLO detection, grid memory, target selection, and depth alignment are visibly
+  running. Invalid depth intentionally prevents a serial-valid target.
+- This test does not establish real-field performance: the mock-up scale,
+  material, hole geometry, lighting, and distance differ from the field board.
+
+**Evidence**
+- Screenshot 1: 12 detections, target 7, `Dist=900 mm`, `Valid=1`, ring source,
+  `Z=878 mm`, 2564 samples, 0.79 valid fraction.
+- Screenshot 2: 11 detections, target 5, `Dist=0 mm`, `Valid=0`, depth invalid.
+- This was a live Orin/RealSense observation reported by Jeremy. Codex did not
+  independently operate the camera or inspect raw depth arrays.
+
+**Next Test**
+- Run `python test_rgbd_camera.py` through the active X11 session. At one fixed
+  distance and angle, click the black printed area, white circle, and a matte
+  rigid board. Press `s` to save RGB, depth PNG, and raw `.npy` data for one
+  close-valid and one farther-invalid condition. Keep the target fixed and
+  repeat away from the bright window before considering configuration changes.
+
+**Display-label clarification**
+- The per-hole green label `R:0.000` is `red_score`, used for red LED-ring
+  priority; it is not range or depth. The current pipeline computes and displays
+  depth only for the one selected `Target` shown in the yellow status line.
+  Therefore the screenshots do not show eleven individual depth failures. They
+  show one selected-target success in the first frame and one selected-target
+  failure in the second frame.
+
+---
+
+## 2026-08-24 — Codex: Raw wall depth observed at about 4.1 m
+
+**Jeremy's Question / Observation**
+- Jeremy reports that the farthest valid reading seen in `test_rgbd_camera.py`
+  is `4106 mm`, around the clicked location. The supplied screenshot shows a
+  nearby click at pixel `(645,269)` reading `3906 mm` on the distant wall.
+
+**Discussion Result**
+- This is positive evidence that the live aligned RealSense depth stream is not
+  hard-limited to 3 m in the current setup. It can return raw depth around
+  4.1 m on the wall.
+- The click is on the distant wall, not on the printed target. This therefore
+  does not yet prove that the black print or white circles provide usable depth
+  at the same distance, nor that target-ring sampling will pass its quality
+  gates.
+- The click tool reports optical-axis depth (`Z`) from a spatial median, not the
+  full Euclidean camera-to-point range. Near the image center the difference is
+  normally small, but the two quantities should not be treated as identical.
+- The depth colour display being clipped at `3000 mm` is only a visualization
+  setting; it does not cap the numeric raw-depth reading.
+
+**Why**
+- `robust_pixel_depth(..., radius=4)` uses a `9 x 9` window, rejects non-finite
+  values and values outside `200..8000 mm`, then reports the median of the valid
+  pixels. Thus the displayed value is more robust than a single pixel but is
+  not a multi-frame stability measurement.
+- A wall reading isolates sensor/range feasibility from the printed-board
+  material question. Comparing wall, black print, and white circle at the same
+  fixed distance can distinguish general range/lighting failure from an
+  infrared reflectivity or target-region issue.
+
+**Changed / Added**
+- No runtime code, configuration, threshold, calibration, dependency, or Git
+  state changed. This entry adds the reported live test evidence and its limits.
+
+**Calculation / Example**
+- `radius=4` gives `(2 x 4 + 1)^2 = 81` candidate pixels before validity
+  filtering; the result is their valid-depth median.
+- The screenshot shows `3906 mm`; Jeremy's maximum observation is `4106 mm`.
+  If those readings were from the exact same fixed scene point, their spread
+  would be `200 mm`, or about `4.9%` of `4106 mm`. That would describe observed
+  repeatability spread, not accuracy error, because no tape/laser ground-truth
+  distance has yet been supplied.
+
+**Impact**
+- The earlier selected-target depth failure cannot be explained by a 3 m
+  software display ceiling. Surface material, target size/ROI quality, lighting,
+  angle, motion, and actual range remain candidates.
+- This test does not establish dependable 4.1 m operation or competition-range
+  performance; it establishes one useful maximum observed wall depth.
+
+**Evidence**
+- Screenshot: raw RGB click overlay shows `(645,269) 3906 mm` on the distant
+  wall. Jeremy reports a maximum of `4106 mm` around that point.
+- This was a live Orin/RealSense observation reported by Jeremy. Codex did not
+  operate the camera or inspect the saved raw depth arrays.
+
+**Next Test**
+- Keep the camera and clicked wall point fixed for 10–20 seconds and record the
+  minimum and maximum reading; press `s` to save one representative capture.
+- At the same fixed distance and angle, compare the wall, black printed area,
+  and white circle. A valid wall with invalid paper indicates a material/ROI
+  issue; invalid depth on all three points indicates range, lighting, geometry,
+  or sensor conditions.
+- For accuracy rather than availability, repeat at tape/laser-measured 1, 2, 3,
+  and 4 m distances and compare each median depth with the ground truth.
+
+---
+
+## 2026-08-24 — Codex: Same-pixel 4 m repeatability evidence
+
+**User Request / Result Supplied**
+- Jeremy supplied the result of the fixed-point follow-up test. Two screenshots
+  show the same clicked pixel `(741,264)` on the distant white wall reading
+  `4075 mm` and `3862 mm` in consecutive observations.
+
+**Discussion Result**
+- Both samples are valid raw depth near 4 m, strengthening the conclusion that
+  the RealSense stream remains available at that range in this indoor setup.
+- The same-pixel readings differ enough that 4 m output should not yet be called
+  stable or accurate. The observed two-sample span is `213 mm`.
+- This is still a wall test, not a printed-target material test. It does not
+  explain whether the black print or white target circles pass the primary ring
+  estimator at the same range.
+
+**Why**
+- Fixing the pixel removes click-position change as the main explanation. The
+  remaining spread may include temporal stereo noise, low wall texture, strong
+  nearby illumination, exposure changes, or small camera/scene motion; two
+  screenshots cannot separate those causes.
+- The current click helper already takes a spatial median over a 9-by-9 region,
+  so these screenshots expose frame-to-frame variation after spatial filtering,
+  not merely one bad depth pixel.
+
+**Changed**
+- No vision, depth, serial, lifecycle, recovery, threshold, calibration, or Git
+  behavior changed.
+
+**Added**
+- Added this two-frame real-hardware repeatability evidence to the shared
+  handoff only.
+
+**Calculation / Example**
+- Difference: `4075 - 3862 = 213 mm`.
+- Two-sample midpoint: `(4075 + 3862) / 2 = 3968.5 mm`.
+- Full span relative to that midpoint:
+  `213 / 3968.5 x 100 = 5.37%`.
+- Each endpoint is `106.5 mm`, or about `2.68%`, from the midpoint. This is a
+  two-sample range description, not standard deviation and not accuracy error.
+- Both values pass the configured raw click validity interval `200..8000 mm`.
+
+**Impact**
+- Near-4 m availability is demonstrated, but a single-frame distance at this
+  range may vary by roughly 0.2 m in the supplied pair. Autonomous distance use
+  still needs a larger fixed-scene sample and ground-truth comparison.
+- The prior conclusion remains unchanged: a 3 m display-colour ceiling is not
+  the cause of the printed-target invalid result.
+
+**Evidence**
+- Screenshot 1: `(741,264) 4075 mm`.
+- Screenshot 2: `(741,264) 3862 mm`.
+- Both are live Orin/RealSense results reported by Jeremy. Codex did not operate
+  the camera, inspect raw `.npy` frames, or measure the physical wall distance.
+- Current source verification: `robust_pixel_depth(..., radius=4)` samples a
+  9-by-9 ROI, keeps finite values in `200..8000 mm`, and returns their median.
+
+**Next Test**
+- Collect at least 30 fixed-camera readings from `(741,264)` or save a short raw
+  sequence. Report median, minimum, maximum, and invalid-frame count rather than
+  relying on two endpoints.
+- Then repeat at the same physical distance on the wall, black print, and white
+  target circle. Use a tape/laser distance if accuracy error is needed.
+
+---
+
+## 2026-08-24 — Codex: Printed target returns raw depth at about 4 m
+
+**User Request / Result Supplied**
+- Jeremy fixed the printed target onto the distant wall as requested and asked
+  whether this arrangement/result is correct.
+- Two screenshots sample different target-paper pixels: `(646,488)` and
+  `(625,504)`. Both report exactly `4043 mm`.
+
+**Discussion Result**
+- Yes, this is the correct controlled material comparison. The printed target
+  itself returns valid aligned raw depth at approximately 4 m in this setup.
+- The earlier `Depth: invalid / unavailable` result is therefore not explained
+  by the target merely being flat 2D paper or by a 3 m software ceiling.
+- The remaining fault boundary is narrower: handheld motion/angle in the prior
+  test, transient frame quality, YOLO box size/alignment, or the primary ring
+  estimator's sample count/fraction/outlier gates.
+
+**Why**
+- Fixing the paper to the same distant wall controls distance and removes most
+  handheld curvature/motion. Valid samples on two target-paper locations show
+  that the aligned depth image contains usable values on the printed surface.
+- Raw point availability is necessary but not sufficient for the production
+  estimator: the latter samples an elliptical ring around the selected YOLO
+  box and requires at least 40 retained values and 20% valid fraction.
+
+**Changed**
+- No runtime code, depth algorithm, threshold, calibration, serial behavior,
+  lifecycle/recovery behavior, dependency, or Git state changed.
+
+**Added**
+- Added this real-hardware printed-target result to the shared handoff only.
+
+**Flow**
+- Current evidence covers `RealSense capture -> aligned depth -> 9x9 clicked
+  ROI -> valid-depth median`.
+- It does not yet cover `YOLO box -> selected target -> elliptical ring sample
+  -> MAD filtering -> 3D range -> valid packet` at this fixed 4 m setup.
+
+**Calculation / Example**
+- Sample A: `(646,488) = 4043 mm`.
+- Sample B: `(625,504) = 4043 mm`.
+- Pair difference: `abs(4043 - 4043) = 0 mm`; pair midpoint is `4043 mm`.
+- Both values are inside the configured valid range `200..8000 mm`.
+- This exact agreement is two-point evidence, not a statistical stability or
+  accuracy guarantee; no physical ground-truth distance was supplied.
+
+**Impact**
+- Do not lower `DEPTH_MIN_VALID_SAMPLES`, `DEPTH_MIN_VALID_FRACTION`, or other
+  safety gates based on the previous invalid screenshot.
+- The next test can move from raw sensor diagnosis to the full selected-target
+  path while keeping the paper and camera fixed.
+
+**Evidence**
+- Screenshot 1: printed-target pixel `(646,488)`, `4043 mm`.
+- Screenshot 2: printed-target pixel `(625,504)`, `4043 mm`.
+- This is live Orin/RealSense evidence supplied by Jeremy. Codex visually
+  inspected the screenshots but did not operate the camera, inspect saved raw
+  arrays, or measure the physical distance.
+
+**Next Test**
+- Without moving the camera or target, stop the raw viewer and run
+  `python test_coordinate.py --source realsense` through the active X11
+  session. Record `Target`, `Dist`, `Valid`, `Src`, `Depth samples`, and valid
+  fraction for the selected hole.
+- If the full pipeline now reports a stable valid distance, the prior failure
+  was likely a test-condition/transient issue. If it reports invalid while the
+  raw click remains `4043 mm`, save the raw frame with `s`; then inspect the
+  selected YOLO box and ring mask rather than weakening safety thresholds.
+
+---
+
+## 2026-08-24 — Codex: A4 mock-up is below the trained detection scale at 4 m
+
+**User Request / Observation**
+- Jeremy ran the full coordinate pipeline with the A4 printed target fixed at
+  about 4 m. The overlay showed `Detected: 0`, `Target: 0`, `Valid: 0`, and
+  `Det: —`.
+- Jeremy believes the paper target is too small and notes that the competition
+  field target will be physically comparable to the supplied full-size field
+  photograph/training image.
+
+**Discussion Result**
+- The evidence supports Jeremy's scale diagnosis. Raw depth on the paper was
+  valid at `4043 mm`, but RGB YOLO found no holes because the printed holes are
+  extremely small in the frame relative to the labelled training examples.
+- A flat printed mock-up also has no real open/net depth discontinuity, so the
+  zero-YOLO depth detector has no correct physical hole cue to observe. Its
+  failure to produce a candidate here is expected and does not validate or
+  invalidate the real field-hole detector.
+- Do not lower `CONFIDENCE=0.35` from this result. Object pixel size/training
+  distribution is the dominant issue; lowering confidence may only add false
+  positives.
+- A physically larger field target is favorable, but physical centimetres alone
+  do not determine detection. The field test must match angular/pixel size at
+  the actual camera-to-target distance.
+
+**Why**
+- YOLO consumes `IMAGE_SIZE=640`. The supplied 640-by-640 labelled training
+  image contains top-row boxes approximately `19..21 x 14..15 px` and main-hole
+  boxes approximately `38..46 x 28..34 px`.
+- In Jeremy's 1280-by-720 live frame, the distant A4 target spans only about
+  several dozen source pixels and each circle is visually around 10 source
+  pixels or less. Rescaling the 1280-wide image to a 640-wide inference image
+  roughly halves those dimensions, leaving only a few pixels per hole. This is
+  an estimate from the screenshot, not a raw-frame measurement.
+
+**Changed**
+- No model, weights, training dataset, inference size, confidence, depth gate,
+  serial behavior, recovery behavior, dependency, or Git state changed.
+
+**Added**
+- Added the real 4 m zero-detection evidence and a scale-equivalent validation
+  plan to the shared handoff only.
+
+**Flow**
+- RealSense RGB `1280 x 720` -> YOLO letterbox/resize to `640` -> confidence
+  filter at `0.35` -> `build_holes()`.
+- Current frame: raw depth exists on paper, but YOLO returns zero boxes. The
+  depth-only observation path also returns zero because printed circles are not
+  physical depth holes.
+
+**Calculation / Example**
+- Training label conversion uses `box_px = normalized_box_size x 640`.
+- Small labelled top example:
+  `0.0296875 x 640 = 19 px` wide and
+  `0.021875 x 640 = 14 px` high.
+- Large labelled main-hole example:
+  `0.07109375 x 640 = 45.5 px` wide and
+  `0.05234375 x 640 = 33.5 px` high.
+- Angular-size equivalence for an RGB scale test is approximately `D / Z`:
+  a `40 cm` field hole at `8 m` has `0.40 / 8 = 0.05`, equal to a `20 cm`
+  proxy at `4 m` (`0.20 / 4 = 0.05`). A `20 cm` bonus hole at `8 m` is
+  similarly represented by a `10 cm` proxy at `4 m`.
+- Pinhole pixel diameter is `p = D_mm x fx_px / Z_mm`. For an illustrative
+  `fx=900 px`, a 400 mm hole at 8000 mm gives `45 px` in the 1280-wide camera
+  frame and about `22.5 px` after the 640-wide resize. Actual runtime intrinsics
+  must replace the illustrative `fx` before treating this as a prediction.
+
+**Impact**
+- This test does not reveal a new depth bug or justify a threshold change. It
+  demonstrates that the A4-at-4 m setup is outside the useful RGB test scale.
+- Real-field readiness remains unproven: the 40 cm standard holes and 20 cm
+  bonus holes still need actual-distance or angularly equivalent testing, and
+  RealSense depth availability at 8 m is a separate unresolved test.
+
+**Evidence**
+- Live screenshot: `Detected: 0`, neutral target fields, fixed A4 target visible
+  near the centre at about 4 m.
+- Prior raw-depth screenshots: two target-paper points each read `4043 mm`.
+- Supplied training image is `640 x 640`; its matching YOLO label contains all
+  12 hole boxes with the pixel ranges calculated above.
+- Codex inspected screenshots, current `IMAGE_SIZE=640`, `CONFIDENCE=0.35`, and
+  the matching training label. Codex did not run Orin inference, retrain the
+  model, or measure the live target directly from a raw frame.
+
+**Next Test**
+- For an RGB scale-equivalent test in the available 4 m room, make a rigid proxy
+  with 20 cm standard circles and 10 cm bonus circles; this approximates the
+  angular size of 40/20 cm field holes at 8 m. Keep lighting and camera fixed
+  and record detection count/confidence over at least 30 frames.
+- Later, test the real-size/open-hole structure at the actual field distance to
+  validate depth, material, perspective, and background. Do not enable the
+  observation-only depth detector for control from the printed proxy result.
