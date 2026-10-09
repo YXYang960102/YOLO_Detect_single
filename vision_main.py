@@ -455,6 +455,17 @@ def run_vision_session(
                 initial_start = False
                 active_started = clock()
 
+                # FPS instrumentation (2026-10-09): nothing previously
+                # measured or printed the actual achieved loop rate, only
+                # the camera's requested capture rate (--fps/REALSENSE_FPS)
+                # -- that's a request to the camera, not a measurement of
+                # how fast this loop (capture + YOLO + depth) actually
+                # runs. Rolling average over the last 30 frames, printed at
+                # most once per second so it doesn't flood the console.
+                fps_window = []
+                last_frame_time = time.perf_counter()
+                last_fps_print = last_frame_time
+
                 while True:
                     if require_mega:
                         if not serial_tx.mega_alive():
@@ -484,6 +495,18 @@ def run_vision_session(
                     height, width = frame.shape[:2]
                     frame_center_x = width // 2
                     frame_center_y = height // 2
+
+                    now = time.perf_counter()
+                    frame_interval = now - last_frame_time
+                    last_frame_time = now
+                    if frame_interval > 0:
+                        fps_window.append(1.0 / frame_interval)
+                        if len(fps_window) > 30:
+                            fps_window.pop(0)
+                    if now - last_fps_print >= 1.0:
+                        last_fps_print = now
+                        avg_fps = sum(fps_window) / len(fps_window) if fps_window else 0.0
+                        print(f"fps={avg_fps:.1f}")
 
                     # Original detection / grid / tracking / red-target /
                     # target-manager algorithm remains in the same order.
