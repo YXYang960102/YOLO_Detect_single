@@ -481,6 +481,19 @@ def run_vision_session(
                 # TX/TY/Dist status text) below.
                 show_boxes = True
 
+                # Per-stage timing (2026-10-09): FPS alone doesn't say which
+                # stage got slow when a target is detected (measured: ~13.6
+                # fps with nothing detected vs. 5.5-10 fps once something
+                # is). Accumulated per stage name, averaged and printed on
+                # the same 1s throttle as fps= above, then reset -- same
+                # pattern as fps_window, just keyed by stage.
+                stage_totals = {}
+
+                def _record_stage(name, elapsed):
+                    entry = stage_totals.setdefault(name, [0.0, 0])
+                    entry[0] += elapsed
+                    entry[1] += 1
+
                 while True:
                     if require_mega:
                         if not serial_tx.mega_alive():
@@ -499,12 +512,14 @@ def run_vision_session(
                         if camera_frame is None:
                             continue
 
+                        _t0 = time.perf_counter()
                         results = model(
                             camera_frame.color,
                             imgsz=IMAGE_SIZE,
                             conf=CONFIDENCE,
                             verbose=False,
                         )
+                        _record_stage("yolo", time.perf_counter() - _t0)
 
                     frame = camera_frame.color
                     height, width = frame.shape[:2]
@@ -523,25 +538,45 @@ def run_vision_session(
                         avg_fps = sum(fps_window) / len(fps_window) if fps_window else 0.0
                         current_fps_display = avg_fps
                         print(f"fps={avg_fps:.1f}")
+                        if stage_totals:
+                            parts = " ".join(
+                                f"{name}={(total / count) * 1000:.1f}ms"
+                                for name, (total, count) in sorted(stage_totals.items())
+                            )
+                            print(f"timing: {parts}")
+                            stage_totals.clear()
 
                     # Original detection / grid / tracking / red-target /
                     # target-manager algorithm remains in the same order.
+                    _t0 = time.perf_counter()
                     raw_holes = build_holes(results)
+                    _record_stage("build_holes", time.perf_counter() - _t0)
 
                     if len(raw_holes) == 0 and camera_frame.depth_mm is not None:
                         # Observation-only: depth candidates never reach
                         # control-owned state. Always send the neutral packet.
+                        _t0 = time.perf_counter()
                         depth_candidates = depth_hole_detector.detect(
                             camera_frame.depth_mm, camera_frame.intrinsics
                         )
+                        _record_stage("depth_observe", time.perf_counter() - _t0)
                         holes = build_observation_holes(depth_candidates)
                         target_hole = None
                         depth_measurement = None
                         tx, ty, distance, target_id, valid = 0, 0, 0, 0, 0
                     else:
+                        _t0 = time.perf_counter()
                         holes = assign_ids(raw_holes, width)
+                        _record_stage("assign_ids", time.perf_counter() - _t0)
+
+                        _t0 = time.perf_counter()
                         holes = grid_tracker.update(holes, frame=frame)
+                        _record_stage("grid_tracker", time.perf_counter() - _t0)
+
+                        _t0 = time.perf_counter()
                         red_target = select_red_target(frame, holes, stabilizer)
+                        _record_stage("red_target", time.perf_counter() - _t0)
+
                         target_hole = target_manager.select(
                             holes, red_target, width, height
                         )
@@ -557,6 +592,7 @@ def run_vision_session(
                             if target_hole is not None
                             else 0
                         )
+                        _t0 = time.perf_counter()
                         distance, valid, depth_measurement = (
                             resolve_distance_and_validity(
                                 target_hole,
@@ -566,6 +602,7 @@ def run_vision_session(
                                 args.distance_mode,
                             )
                         )
+                        _record_stage("depth_resolve", time.perf_counter() - _t0)
 
                     serial_tx.send(tx, ty, distance, target_id, valid)
 
