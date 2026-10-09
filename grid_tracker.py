@@ -223,7 +223,10 @@ class GridTracker:
             diagonals.append(np.hypot(x2 - x1, y2 - y1))
 
         max_error = max(15.0, float(np.median(diagonals)) * self.max_error_ratio)
+
+        t0 = time.perf_counter()
         shift, matches = self._best_translation(holes, max_error, motion_hint)
+        self.last_motion_timings["match"] = time.perf_counter() - t0
 
         if shift is None or len(matches) < self.min_matches:
             return []
