@@ -155,55 +155,68 @@ def draw_debug(
     valid,
     target_manager,
     depth_measurement=None,
-    show_boxes=True,
+    show_overlay=True,
     fps=0.0,
 ):
     height, width = frame.shape[:2]
     frame_center_x = width // 2
     frame_center_y = height // 2
 
-    # Centering readout (crosshair + status text below) is always drawn --
-    # this is the "how far off center / is it locked" answer Jeremy needs
-    # visible at all times. Only the per-hole box/circle/ID-label layer
-    # below is gated by show_boxes.
+    # FPS is always drawn, even with show_overlay off (2026-10-09: Jeremy
+    # wants an option to show literally nothing but the camera feed + FPS
+    # number -- see run_vision_session's 'o' key).
+    cv2.putText(
+        frame,
+        f"FPS:{fps:.1f}",
+        (20, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (0, 255, 255),
+        2,
+    )
+
+    if not show_overlay:
+        return
+
+    # Centering readout (crosshair + status text below) + per-hole boxes --
+    # all gated together by show_overlay now, only FPS above is exempt.
     cv2.line(frame, (frame_center_x, 0), (frame_center_x, height), (255, 255, 0), 1)
     cv2.line(frame, (0, frame_center_y), (width, frame_center_y), (255, 255, 0), 1)
 
-    if show_boxes:
-        for hole in holes:
-            hole_id = hole["id"]
-            x1, y1, x2, y2 = hole["box"]
-            is_target = target_hole is not None and hole_id == target_hole["id"]
-            target_type = target_hole.get("target_type", TARGET_NONE) if is_target else TARGET_NONE
+    for hole in holes:
+        hole_id = hole["id"]
+        x1, y1, x2, y2 = hole["box"]
+        is_target = target_hole is not None and hole_id == target_hole["id"]
+        target_type = target_hole.get("target_type", TARGET_NONE) if is_target else TARGET_NONE
 
-            if target_type == "red":
-                color = (0, 0, 255)
-            elif target_type == "normal":
-                color = (255, 255, 0)
-            else:
-                color = (0, 255, 0)
+        if target_type == "red":
+            color = (0, 0, 255)
+        elif target_type == "normal":
+            color = (255, 255, 0)
+        else:
+            color = (0, 255, 0)
 
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
-            if hole_id in RED_TARGET_IDS and hole["red_score"] >= RED_SCORE_THRESHOLD:
-                ring_x1, ring_y1, ring_x2, ring_y2 = hole["ring_box"]
-                cv2.rectangle(
-                    frame,
-                    (ring_x1, ring_y1),
-                    (ring_x2, ring_y2),
-                    (0, 0, 255),
-                    2,
-                )
-            cv2.circle(frame, (hole["cx"], hole["cy"]), 5, (0, 255, 0), -1)
-            cv2.putText(
+        if hole_id in RED_TARGET_IDS and hole["red_score"] >= RED_SCORE_THRESHOLD:
+            ring_x1, ring_y1, ring_x2, ring_y2 = hole["ring_box"]
+            cv2.rectangle(
                 frame,
-                f"ID:{hole_id} R:{hole['red_score']:.3f}",
-                (hole["cx"] + 8, hole["cy"]),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                color,
+                (ring_x1, ring_y1),
+                (ring_x2, ring_y2),
+                (0, 0, 255),
                 2,
             )
+        cv2.circle(frame, (hole["cx"], hole["cy"]), 5, (0, 255, 0), -1)
+        cv2.putText(
+            frame,
+            f"ID:{hole_id} R:{hole['red_score']:.3f}",
+            (hole["cx"] + 8, hole["cy"]),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            color,
+            2,
+        )
 
     target_id = target_hole["id"] if target_hole is not None else 0
     target_type = target_hole.get("target_type", TARGET_NONE) if target_hole else TARGET_NONE
@@ -212,8 +225,8 @@ def draw_debug(
     detector_source = holes[0].get("detector", "-") if len(holes) > 0 else "-"
     cv2.putText(
         frame,
-        f"Detected: {len(holes)}  FPS:{fps:.1f}",
-        (20, 40),
+        f"Detected: {len(holes)}",
+        (20, 65),
         cv2.FONT_HERSHEY_SIMPLEX,
         1,
         (0, 255, 255),
@@ -222,7 +235,7 @@ def draw_debug(
     cv2.putText(
         frame,
         f"TX:{tx} TY:{ty} Dist:{distance}mm Target:{target_id} Type:{target_type} Valid:{valid}",
-        (20, 80),
+        (20, 95),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.65,
         (0, 255, 255),
@@ -232,7 +245,7 @@ def draw_debug(
         frame,
         f"Shots:{shots}/{MAX_SHOTS_PER_HOLE} Mem:{grid_memory_count()} "
         f"ID:{id_mode} Det:{detector_source}",
-        (20, 110),
+        (20, 125),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.7,
         (0, 255, 255),
@@ -247,7 +260,7 @@ def draw_debug(
                 f"Z:{depth_measurement.z_mm:.0f} Range:{depth_measurement.range_mm:.0f} mm "
                 f"Src:{depth_measurement.source}"
             ),
-            (20, 140),
+            (20, 155),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.65,
             (0, 255, 255),
@@ -259,7 +272,7 @@ def draw_debug(
                 f"Depth samples:{depth_measurement.sample_count} "
                 f"valid:{depth_measurement.valid_fraction:.2f}"
             ),
-            (20, 170),
+            (20, 185),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.65,
             (0, 255, 255),
@@ -269,7 +282,7 @@ def draw_debug(
         cv2.putText(
             frame,
             "Depth: invalid / unavailable",
-            (20, 140),
+            (20, 155),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.65,
             (0, 165, 255),
@@ -474,12 +487,12 @@ def run_vision_session(
                 last_fps_print = last_frame_time
                 current_fps_display = 0.0
 
-                # Box-overlay toggle (2026-10-09): 'o' hides the per-hole
-                # box/circle/ID-label layer so the raw camera feed is clean
-                # for showing teammates, without disabling detection/serial
-                # output or the always-on centering readout (crosshair +
-                # TX/TY/Dist status text) below.
-                show_boxes = True
+                # Display-overlay toggle (2026-10-09, revised): 'o' hides
+                # everything except the FPS number -- crosshair, per-hole
+                # boxes, and the TX/TY/Dist status text all go together now
+                # (Jeremy wants a truly clean feed option, not just boxes
+                # off). Detection/serial output is unaffected either way.
+                show_overlay = True
 
                 # Per-stage timing (2026-10-09): FPS alone doesn't say which
                 # stage got slow when a target is detected (measured: ~13.6
@@ -572,6 +585,8 @@ def run_vision_session(
                         _t0 = time.perf_counter()
                         holes = grid_tracker.update(holes, frame=frame)
                         _record_stage("grid_tracker", time.perf_counter() - _t0)
+                        for _name, _elapsed in grid_tracker.last_motion_timings.items():
+                            _record_stage(f"grid_{_name}", _elapsed)
 
                         _t0 = time.perf_counter()
                         red_target = select_red_target(frame, holes, stabilizer)
@@ -617,7 +632,7 @@ def run_vision_session(
                             valid,
                             target_manager,
                             depth_measurement,
-                            show_boxes=show_boxes,
+                            show_overlay=show_overlay,
                             fps=current_fps_display,
                         )
                         cv2.imshow("Coordinate System RGB-D", frame)
@@ -636,8 +651,8 @@ def run_vision_session(
                         if key == ord("c"):
                             target_manager.reset_shots()
                         if key == ord("o"):
-                            show_boxes = not show_boxes
-                            print(f"[display] boxes {'ON' if show_boxes else 'OFF'}")
+                            show_overlay = not show_overlay
+                            print(f"[display] overlay {'ON' if show_overlay else 'OFF'}")
             except RecoverableCameraError as exc:
                 recoverable_error = exc
             finally:

@@ -1,3 +1,5 @@
+import time
+
 import cv2
 import numpy as np
 
@@ -21,6 +23,13 @@ class GridTracker:
         self.positions = {}
         self.sizes = {}
         self.previous_gray = None
+        # Per-call sub-stage timings from the last _estimate_frame_motion()
+        # (2026-10-09): the 0.75 motion-scale downsample didn't clearly cut
+        # the 40-179ms swings measured on real hardware, so vision_main.py
+        # reads this after update() to find which of resize+gray/features/
+        # flow is actually the volatile one, instead of guessing at another
+        # scale value.
+        self.last_motion_timings = {}
 
     def reset(self):
         self.positions.clear()
@@ -127,6 +136,7 @@ class GridTracker:
         return best_shift, best_matches
 
     def _estimate_frame_motion(self, frame):
+        self.last_motion_timings = {}
         if frame is None:
             return None
 
@@ -137,32 +147,38 @@ class GridTracker:
         # matching (motion_hint=None still works, see _best_translation's
         # fallback), not the tx/ty aiming value sent to Mega, so a coarser
         # estimate here only risks rare hole-ID mismatches, not aim error.
+        t0 = time.perf_counter()
         scale = GRID_TRACKER_MOTION_SCALE
         small_frame = cv2.resize(
             frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
         )
         gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
+        self.last_motion_timings["resize_gray"] = time.perf_counter() - t0
         previous = self.previous_gray
         self.previous_gray = gray
 
         if previous is None or previous.shape != gray.shape:
             return None
 
+        t0 = time.perf_counter()
         points = cv2.goodFeaturesToTrack(
             previous,
             maxCorners=120,
             qualityLevel=0.01,
             minDistance=10,
         )
+        self.last_motion_timings["features"] = time.perf_counter() - t0
         if points is None or len(points) < 6:
             return None
 
+        t0 = time.perf_counter()
         next_points, status, _ = cv2.calcOpticalFlowPyrLK(
             previous,
             gray,
             points,
             None,
         )
+        self.last_motion_timings["flow"] = time.perf_counter() - t0
         if next_points is None or status is None:
             return None
 
