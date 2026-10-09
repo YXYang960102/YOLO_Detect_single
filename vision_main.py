@@ -155,48 +155,55 @@ def draw_debug(
     valid,
     target_manager,
     depth_measurement=None,
+    show_boxes=True,
+    fps=0.0,
 ):
     height, width = frame.shape[:2]
     frame_center_x = width // 2
     frame_center_y = height // 2
 
+    # Centering readout (crosshair + status text below) is always drawn --
+    # this is the "how far off center / is it locked" answer Jeremy needs
+    # visible at all times. Only the per-hole box/circle/ID-label layer
+    # below is gated by show_boxes.
     cv2.line(frame, (frame_center_x, 0), (frame_center_x, height), (255, 255, 0), 1)
     cv2.line(frame, (0, frame_center_y), (width, frame_center_y), (255, 255, 0), 1)
 
-    for hole in holes:
-        hole_id = hole["id"]
-        x1, y1, x2, y2 = hole["box"]
-        is_target = target_hole is not None and hole_id == target_hole["id"]
-        target_type = target_hole.get("target_type", TARGET_NONE) if is_target else TARGET_NONE
+    if show_boxes:
+        for hole in holes:
+            hole_id = hole["id"]
+            x1, y1, x2, y2 = hole["box"]
+            is_target = target_hole is not None and hole_id == target_hole["id"]
+            target_type = target_hole.get("target_type", TARGET_NONE) if is_target else TARGET_NONE
 
-        if target_type == "red":
-            color = (0, 0, 255)
-        elif target_type == "normal":
-            color = (255, 255, 0)
-        else:
-            color = (0, 255, 0)
+            if target_type == "red":
+                color = (0, 0, 255)
+            elif target_type == "normal":
+                color = (255, 255, 0)
+            else:
+                color = (0, 255, 0)
 
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
-        if hole_id in RED_TARGET_IDS and hole["red_score"] >= RED_SCORE_THRESHOLD:
-            ring_x1, ring_y1, ring_x2, ring_y2 = hole["ring_box"]
-            cv2.rectangle(
+            if hole_id in RED_TARGET_IDS and hole["red_score"] >= RED_SCORE_THRESHOLD:
+                ring_x1, ring_y1, ring_x2, ring_y2 = hole["ring_box"]
+                cv2.rectangle(
+                    frame,
+                    (ring_x1, ring_y1),
+                    (ring_x2, ring_y2),
+                    (0, 0, 255),
+                    2,
+                )
+            cv2.circle(frame, (hole["cx"], hole["cy"]), 5, (0, 255, 0), -1)
+            cv2.putText(
                 frame,
-                (ring_x1, ring_y1),
-                (ring_x2, ring_y2),
-                (0, 0, 255),
+                f"ID:{hole_id} R:{hole['red_score']:.3f}",
+                (hole["cx"] + 8, hole["cy"]),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                color,
                 2,
             )
-        cv2.circle(frame, (hole["cx"], hole["cy"]), 5, (0, 255, 0), -1)
-        cv2.putText(
-            frame,
-            f"ID:{hole_id} R:{hole['red_score']:.3f}",
-            (hole["cx"] + 8, hole["cy"]),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            color,
-            2,
-        )
 
     target_id = target_hole["id"] if target_hole is not None else 0
     target_type = target_hole.get("target_type", TARGET_NONE) if target_hole else TARGET_NONE
@@ -205,7 +212,7 @@ def draw_debug(
     detector_source = holes[0].get("detector", "-") if len(holes) > 0 else "-"
     cv2.putText(
         frame,
-        f"Detected: {len(holes)}",
+        f"Detected: {len(holes)}  FPS:{fps:.1f}",
         (20, 40),
         cv2.FONT_HERSHEY_SIMPLEX,
         1,
@@ -465,6 +472,14 @@ def run_vision_session(
                 fps_window = []
                 last_frame_time = time.perf_counter()
                 last_fps_print = last_frame_time
+                current_fps_display = 0.0
+
+                # Box-overlay toggle (2026-10-09): 'o' hides the per-hole
+                # box/circle/ID-label layer so the raw camera feed is clean
+                # for showing teammates, without disabling detection/serial
+                # output or the always-on centering readout (crosshair +
+                # TX/TY/Dist status text) below.
+                show_boxes = True
 
                 while True:
                     if require_mega:
@@ -506,6 +521,7 @@ def run_vision_session(
                     if now - last_fps_print >= 1.0:
                         last_fps_print = now
                         avg_fps = sum(fps_window) / len(fps_window) if fps_window else 0.0
+                        current_fps_display = avg_fps
                         print(f"fps={avg_fps:.1f}")
 
                     # Original detection / grid / tracking / red-target /
@@ -564,6 +580,8 @@ def run_vision_session(
                             valid,
                             target_manager,
                             depth_measurement,
+                            show_boxes=show_boxes,
+                            fps=current_fps_display,
                         )
                         cv2.imshow("Coordinate System RGB-D", frame)
 
@@ -580,6 +598,9 @@ def run_vision_session(
                             target_manager.record_shot(target_hole["id"])
                         if key == ord("c"):
                             target_manager.reset_shots()
+                        if key == ord("o"):
+                            show_boxes = not show_boxes
+                            print(f"[display] boxes {'ON' if show_boxes else 'OFF'}")
             except RecoverableCameraError as exc:
                 recoverable_error = exc
             finally:
