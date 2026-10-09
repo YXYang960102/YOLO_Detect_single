@@ -4,6 +4,7 @@ import numpy as np
 from config import (
     GRID_TRACKER_MAX_ERROR_RATIO,
     GRID_TRACKER_MIN_MATCHES,
+    GRID_TRACKER_MOTION_SCALE,
     ROWS,
     COLS,
 )
@@ -129,7 +130,18 @@ class GridTracker:
         if frame is None:
             return None
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Optical flow (cvtColor + goodFeaturesToTrack + calcOpticalFlowPyrLK)
+        # measured 40-141ms on real hardware at full 1280x720 -- the single
+        # most expensive, most variable stage in the vision loop. This is
+        # only a disambiguation hint for GridTracker.update()'s shift
+        # matching (motion_hint=None still works, see _best_translation's
+        # fallback), not the tx/ty aiming value sent to Mega, so a coarser
+        # estimate here only risks rare hole-ID mismatches, not aim error.
+        scale = GRID_TRACKER_MOTION_SCALE
+        small_frame = cv2.resize(
+            frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+        )
+        gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
         previous = self.previous_gray
         self.previous_gray = gray
 
@@ -167,7 +179,10 @@ class GridTracker:
         if len(inliers) < 6:
             return None
 
-        return np.median(inliers, axis=0).astype(np.float32)
+        # Deltas were computed on the downscaled frame; convert back to
+        # original-frame pixel units before returning (callers/tests expect
+        # this in full-resolution pixels, same contract as before).
+        return (np.median(inliers, axis=0) / scale).astype(np.float32)
 
     def update(self, holes, frame=None, motion_hint=None):
         frame_motion = self._estimate_frame_motion(frame)

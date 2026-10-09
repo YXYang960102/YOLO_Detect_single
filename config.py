@@ -18,6 +18,11 @@ GRID_GEOMETRY_MAX_ERROR_RATIO = 0.75
 GRID_GEOMETRY_ANCHOR_WEIGHT = 0.35
 GRID_TRACKER_MIN_MATCHES = 3
 GRID_TRACKER_MAX_ERROR_RATIO = 0.65
+# Downscale factor applied only inside GridTracker's optical-flow motion
+# hint (not detection/tracking itself) -- 0.75 chosen as a conservative
+# first step (2026-10-09) after measuring grid_tracker as the dominant,
+# highly variable per-frame cost (40-141ms) on real hardware.
+GRID_TRACKER_MOTION_SCALE = 0.75
 
 RED_SCORE_THRESHOLD = 0.05
 RED_TARGET_SWITCH_MARGIN = 0.03
