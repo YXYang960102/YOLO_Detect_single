@@ -64,20 +64,47 @@ class GridTracker:
         x1, y1, x2, y2 = hole["box"]
         return max(1.0, float(np.hypot(x2 - x1, y2 - y1)))
 
-    def _match_for_shift(self, holes, shift, max_error):
-        edges = []
+    def _match_for_shift(
+        self,
+        current_points,
+        current_sizes,
+        previous_points,
+        previous_sizes,
+        position_ids,
+        shift,
+        max_error,
+    ):
+        # Vectorized replacement (2026-10-09) for what used to be a nested
+        # Python loop calling np.linalg.norm()/np.log() once per hole x
+        # position pair (up to ~144 pairs, called for each of ~145 shift
+        # candidates -- measured 140-150ms on real hardware). Same formulas,
+        # same max_error filter, same combined_error weighting as before;
+        # this only batches the arithmetic into one numpy call instead of
+        # thousands, eliminating per-call Python/C boundary overhead, not
+        # approximating the math.
+        shifted_previous = previous_points + shift  # (P, 2)
+        diffs = current_points[:, None, :] - shifted_previous[None, :, :]  # (H, P, 2)
+        errors = np.linalg.norm(diffs, axis=2)  # (H, P)
 
-        for hole_index, hole in enumerate(holes):
-            point = np.array([hole["cx"], hole["cy"]], dtype=np.float32)
-            current_size = self._hole_diagonal(hole)
+        size_errors = np.abs(
+            np.log(current_sizes[:, None] / previous_sizes[None, :])
+        )  # (H, P)
+        combined_errors = errors + size_errors * max_error  # (H, P)
 
-            for hole_id, previous in self.positions.items():
-                error = float(np.linalg.norm(point - (previous + shift)))
-                if error <= max_error:
-                    size_error = abs(np.log(current_size / self.sizes[hole_id]))
-                    combined_error = error + size_error * max_error
-                    edges.append((combined_error, error, size_error, hole_index, hole_id))
+        hole_idx, pos_idx = np.where(errors <= max_error)
 
+        edges = [
+            (
+                float(combined_errors[h, p]),
+                float(errors[h, p]),
+                float(size_errors[h, p]),
+                int(h),
+                position_ids[p],
+            )
+            for h, p in zip(hole_idx, pos_idx)
+        ]
+
+        # Sorting/greedy assignment logic unchanged from before.
         matches = []
         used_holes = set()
         used_ids = set()
@@ -93,13 +120,25 @@ class GridTracker:
         return matches
 
     def _best_translation(self, holes, max_error, motion_hint=None):
-        current_points = [
-            np.array([hole["cx"], hole["cy"]], dtype=np.float32)
-            for hole in holes
-        ]
+        # Precomputed once per update() call (not once per shift candidate)
+        # so _match_for_shift() doesn't rebuild these arrays ~145 times.
+        position_ids = list(self.positions.keys())
+        previous_points = np.array(
+            [self.positions[pid] for pid in position_ids], dtype=np.float32
+        )
+        previous_sizes = np.array(
+            [self.sizes[pid] for pid in position_ids], dtype=np.float32
+        )
+        current_points = np.array(
+            [[hole["cx"], hole["cy"]] for hole in holes], dtype=np.float32
+        )
+        current_sizes = np.array(
+            [self._hole_diagonal(hole) for hole in holes], dtype=np.float32
+        )
+
         candidates = [np.zeros(2, dtype=np.float32)]
 
-        for previous in self.positions.values():
+        for previous in previous_points:
             for current in current_points:
                 candidates.append(current - previous)
 
@@ -108,7 +147,15 @@ class GridTracker:
         best_key = None
 
         for shift in candidates:
-            matches = self._match_for_shift(holes, shift, max_error)
+            matches = self._match_for_shift(
+                current_points,
+                current_sizes,
+                previous_points,
+                previous_sizes,
+                position_ids,
+                shift,
+                max_error,
+            )
             if not matches:
                 continue
 
