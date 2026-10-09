@@ -1,5 +1,7 @@
 [Unit]
 Description=YOLO RealSense vision with Mega UART gate
+Requires=jetson-maxperf.service
+After=jetson-maxperf.service
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
@@ -8,7 +10,7 @@ Type=simple
 User=jeremy
 WorkingDirectory=/home/jeremy/RobotAI/YOLO_Detect_single
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/jeremy/RobotAI/YOLO_Detect_single/venv/bin/python /home/jeremy/RobotAI/YOLO_Detect_single/test_coordinate.py --source realsense --serial --serial-port /dev/ttyTHS1 --wait-for-mega --no-display
+ExecStart=/home/jeremy/RobotAI/YOLO_Detect_single/venv/bin/python /home/jeremy/RobotAI/YOLO_Detect_single/test_coordinate.py --source realsense --serial --serial-port /dev/ttyTHS1 --wait-for-mega --no-display --model weights/best.engine
 Restart=on-failure
 RestartSec=2
 KillSignal=SIGINT
