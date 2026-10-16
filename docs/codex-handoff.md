@@ -1552,3 +1552,220 @@ changed in this repo, session by session. Newest entry at the bottom.
 - Later, test the real-size/open-hole structure at the actual field distance to
   validate depth, material, perspective, and background. Do not enable the
   observation-only depth detector for control from the printed proxy result.
+
+---
+
+## 2026-08-27 — Codex: Orin RGB-D update-rate feasibility review
+
+**User Request**
+- Jeremy asked whether replacing last year's camera with the current Solomon
+  depth camera can raise the same Orin Nano and same YOLO model from the
+  observed 30 FPS to 60 FPS or higher.
+
+**Discussion Result**
+- Not automatically. The current project explicitly requests synchronized
+  depth and colour at `1280 x 720 @ 30 FPS`, so the present configuration has a
+  hard camera-side ceiling of 30 FPS before inference or display overhead.
+- Solomon's official `SLM SVRBP-0092C` specification lists `1280 x 720` and a
+  minimum scan time of `0.033 s`, equivalent to about 30.3 scans/s. It does not
+  guarantee 60 FPS at the native mode.
+- Some Intel D400-family devices expose lower-resolution depth profiles such as
+  `848 x 480 @ 60/90`, while RGB at that resolution commonly tops out at 60.
+  The current code requires depth and colour to use the same width, height, and
+  FPS, so a full RGB-D loop above 60 FPS is not a realistic target without
+  changing the architecture. Whether this Solomon device exposes a 60 FPS
+  lower-resolution profile must be verified from the actual Orin device.
+- Even if the camera accepts 60 FPS, the YOLO result rate reaches 60 only if
+  capture/alignment, 640-size `.pt` inference, post-processing, depth sampling,
+  and output together stay below 16.67 ms per result. Camera replacement cannot
+  accelerate the unchanged model/GPU path.
+
+**Why**
+- Sensor FPS and control-result FPS are different quantities. With asynchronous
+  camera capture, the result-rate upper bound is approximately the smaller of
+  camera FPS and processing capacity. Remote X11 drawing can further reduce the
+  apparent/displayed update rate and must be excluded from the benchmark.
+- Solomon specifies this model's working distance as `450..1000 mm`. Jeremy's
+  observed 4 m readings are useful experimental evidence but outside the stated
+  range; 8 m depth performance is not vendor-guaranteed. Higher frame rate and
+  lower resolution may reduce the depth samples/quality available at long range.
+
+**Changed**
+- No source code, camera profile, model, weights, power mode, threshold,
+  dependency, service, or Git state changed.
+
+**Added**
+- Added this feasibility conclusion, official-spec comparison, timing limits,
+  and proposed benchmark sequence to the shared handoff only.
+
+**Flow**
+- RealSense device -> depth and BGR streams with one shared configured
+  resolution/FPS -> depth-to-colour alignment -> YOLO `best.pt` at
+  `IMAGE_SIZE=640` -> hole/grid/target/depth post-processing -> serial/debug
+  output.
+- Current defaults are `1280 x 720 @ 30`; display uses optional OpenCV/X11 and
+  should be disabled when measuring throughput.
+
+**Calculation / Example**
+- Current camera period: `1 / 30 s = 33.33 ms/frame`.
+- Required 60 FPS budget: `1 / 60 s = 16.67 ms/result`.
+- Required 90 FPS budget: `1 / 90 s = 11.11 ms/result`.
+- General asynchronous upper bound:
+  `FPS_result <= min(FPS_camera, 1000 / T_processing_ms)`.
+- Example: if the camera supplies 60 FPS but inference plus all post-processing
+  takes 27 ms, the compute ceiling is `1000 / 27 = 37.0 FPS`, not 60.
+- Solomon scan-time conversion: `1 / 0.033 = 30.3 scans/s`.
+
+**Impact**
+- Native `1280 x 720` behaviour remains 30 FPS. A possible 60 FPS trial would
+  require a supported lower-resolution RGB+depth profile and may trade away
+  depth sample density/long-range reliability.
+- A 90 FPS depth-only profile, if exposed, does not provide 90 FPS YOLO because
+  YOLO requires the colour stream; decoupling 60 FPS RGB from a slower/faster
+  depth stream would be a separate synchronized-data design change.
+
+**Evidence**
+- Current source: `config.py` sets `REALSENSE_WIDTH=1280`,
+  `REALSENSE_HEIGHT=720`, and `REALSENSE_FPS=30`; `camera_source.py` applies the
+  same values to both depth Z16 and colour BGR8 streams.
+- Current inference: `weights/best.pt` (6.0 MB), `IMAGE_SIZE=640`, and no
+  end-to-end FPS instrumentation is present. X11 display is optional through
+  `--no-display`.
+- Official Solomon specification:
+  https://www.solomon-3d.com/tw/products/accupick-instant/
+- Official Intel D400-family datasheet:
+  https://dev.intelrealsense.com/docs/intel-realsense-d400-series-product-family-datasheet
+- Codex inspected source and official documentation only. No Orin benchmark,
+  stream-profile enumeration, TensorRT test, or camera reconfiguration ran.
+
+**Next Test**
+- On Orin, run `rs-enumerate-devices` and preserve the device name plus the
+  colour/depth stream-profile tables. Do not assume D435-compatible profiles
+  from the shared SDK alone.
+- If both streams explicitly list `848 x 480 @ 60`, try the existing CLI without
+  a code change:
+  `python test_coordinate.py --source realsense --width 848 --height 480 --fps 60 --no-display`.
+- The project currently cannot report actual end-to-end FPS. Before choosing a
+  competition profile, add approved stage timing for capture, inference,
+  post-processing, depth/alignment, and display, then compare 1280x720@30 and
+  848x480@60 over a match-length thermal run and long-range target test.
+
+## 2026-09-19 — Codex: horizontal servo manual test implemented in TEL
+
+Jeremy confirmed a 360-degree continuous-rotation servo on Mega A2 and approved
+manual testing before camera-only follow without AS5600. Camera is mounted on
+the turning platform. Added isolated mega_rotate_only_test and
+tools/shooter_keyboard_test/rotate.html in TEL_Robot_2026 (Shooter checkout),
+not a vision controller here. Only A2 attaches; no AS5600/elevation/flywheel.
+Provisional1500us neutral, +/-50us jog (1450/1550),250ms timeout,400ms jog cap;
+Enter stop+disable, Space stop+disconnect, visible-button rearm only.
+Existing D43/D42 active-high limits retained with fail-blocked pullups; actual
+installation remains unconfirmed and missing switches prevent motion.
+Why: isolate the manual actuator test before adding closed-loop visual control.
+Native state and mock JS UI tests pass; TEL normal/old bench/new bench builds
+all pass; new bench395 RAM/5350 flash. No hardware upload or powered test.
+Full changes, formulas, warnings and procedure appended to TEL docs/codex-handoff.md.
+YOLO runtime/model/serial/depth validity unchanged. Future camera-only tracking
+requires a distinct image-target validity contract, not bypassing depth validity.
+Claude review and physical neutral/direction/stop/limit tests remain pending.
+
+## 2026-09-19 — Codex: Jeremy approved no-limits manual bench
+
+Jeremy confirmed no limit switches (only camera+servo), then approved an explicit
+no-limits option in TEL's isolated A2 test. Checkbox plus E_NO_LIMITS authorizes
+that enable session only; stops/timeouts clear it. Protocol v2 reports actual
+bypass. Protected E and production limits remain unchanged. 1450/1500/1550us,
+250ms timeout and400ms jog cap retained; no absolute-angle guarantee. Native
+state/UI mock tests passed; no hardware upload or actuation. YOLO runtime and
+camera-follow behavior unchanged. Full details in TEL handoff/bench README.
+
+## 2026-09-19 — Codex: approved TEL bench enable-race fix
+
+Jeremy reported immediate disable/no movement. Mock reproduced stale disabled
+telemetry cancelling the enable write. Approved fix adds pending confirmation,
+neutral-only waiting,1000ms enable timeout and explicit stop reasons. Firmware
+appends optional v2 reason; old v2 remains accepted by new page. Software tests
+and dedicated Mega build pass; no upload/hardware test. YOLO unchanged. See TEL
+handoff and bench README; this is not proof all physical causes are resolved.
+
+
+## 2026-09-23 — Codex: approved bench signal A2 → A5; UART echo unresolved
+
+Jeremy moved the physical servo signal to A5 and approved updating both manual
+and vision bench environments, keeping production Shooter unchanged. Changed
+shared RotateBenchConstants SIGNAL_PIN from56 to59 (Mega core PIN_A5=59), both
+bench static_asserts, page titles/telemetry labels, README and platformio comments.
+Vision bench inherits the shared pin. No UART pins, baud, protocol, debug output,
+speed or safety changes. Manual remains1500±500us; vision remains1500±150us
+(1350/1500/1650), not measured RPM. Production Rotate staysD29.
+Evidence: both native state tests and both Node UI mock tests pass; both PlatformIO
+builds pass (manual450 RAM/5408 flash; vision654/7332). No upload or powered test.
+Existing platformio.ini line29 whitespace warning and unrelated dirty files retained.
+Jeremy's new screenshot showed RX1 VISION_STANDBY,1 plus MEGA_HEARTBEAT,1 and
+0xFF. After stopping Orin Python he reports only MEGA_HEARTBEAT,1 remains.
+This supports a return path for Mega TX1 to RX1, not proof of a particular short
+or of successful Mega→Orin reception. He has no meter. Next diagnostic: power
+everything off before isolating the external D19 RX1 connection, then observe
+USB debug with motor power off; never enable follow until valid UART verified.
+Claude: pin migration supersedes previous A2 bench descriptions; follow runtime
+and Orin WAIT_MEGA remain unchanged. Reload pages and upload intended bench
+only after review; Codex has not flashed either device.
+
+
+## 2026-09-23 — Codex: approved isolated bare-Mega UART diagnostic
+
+Jeremy reports bare Mega, no expansion board and NO D18/D19 jumper. Screenshot shows intermittent RX1 zero/corrupt bytes and fragments M/E/G, not a clean repeated heartbeat. Earlier intentional D18/D19 loopback successfully received MEGA_HEARTBEAT,1; that result is NOT evidence of an unintended short. Floating RX/coupling remains a hypothesis, not a diagnosis. Jeremy has no multimeter.
+
+Jeremy approved an isolated diagnostic. Added TEL src/Bench/UartBareTest.cpp, src/Constants/UartBareBenchConstants.h, env mega_uart_bare_test in platformio.ini, and tools/shooter_keyboard_test/UART_BARE_TEST.md. No production or YOLO runtime changes. No Servo or actuator initialization. Serial1 RX1 D19 INPUT_PULLUP; 10 seconds QUIET (no TX) then 10 seconds TX (MEGA_HEARTBEAT,1 every 200 ms), then stop TX. USB reports aggregate counts, first 16 bytes in hex, and instantaneous RX pin level. Send R after DONE to repeat. Acquisition loops are bounded. No RX buffer flush at phase transition; driver-delivered bytes only, not framing-error/electrical measurements.
+
+IMPORTANT: test USB-only bare Mega, no shield, no jumper, no Orin, no motor. Disconnect power before changing connections. Internal RX pullup is toward Mega 5V and this test must not be used connected to Orin. Restore the appropriate normal bench firmware before reconnecting the system.
+
+Verification: pio run -e mega_uart_bare_test passed; RAM 416/8192 bytes, flash 4206/253952 bytes. Source inspected for isolated build and absence of actuator initialization. NOT flashed, NOT hardware-tested. Existing A5 benches and temporary RX1 per-byte logging untouched.
+
+Next evidence requested: RESULT,QUIET and RESULT,TX lines at 115200 baud after 20 seconds. Both rx_bytes=0 supports floating-input hypothesis but does not prove all wiring/hardware healthy. RX only during TX suggests coupling/leakage/return path; cannot alone establish a hard short. RX during QUIET warrants further investigation. Claude: do not repeat the already-completed intentional loopback or treat it as unjumpered evidence; keep motor follow disabled until UART path is understood.
+
+
+## 2026-10-16 — Codex: approved operator selection, Orin protocol v2
+
+**User Request / Discussion Result:** Jeremy said 「那你可以開始改了」 after
+reviewing Claude's scope lock. Implemented only selected-hole transport/override;
+recognition, tracking/memory, depth algorithms and config values unchanged.
+
+**Changed / Added / Why:** YOLO_Detect_single serial_tx.py stores selected_target_id
+from strict MEGA_TARGET,2,0|4..12 (invalid commands preserve prior choice; not a
+heartbeat). target_manager.select gains optional selected_target_id=0; nonzero
+requires exactly one matching reliable hole, otherwise None, without auto fallback.
+Override leaves automatic state untouched, bypasses auto ranking/red priority/
+shot budget/stable-frame delay. Zero executes original code. vision_main polls
+serial in standalone serial mode too and passes selection to manager. Its main()
+explicitly constructs protocol_version=2; config and constructor legacy default
+remain 1 to preserve existing parameter values. Deploy matching Mega v2.
+Added docs/operator-selection-v2.md and tests/test_operator_selection.py; recovery
+fake link now models enabled and selected_target_id. No new runtime dependencies.
+
+**Flow / Calculation:** Mega converts key→vision only once, e.g. key1→10;
+Orin receives MEGA_TARGET,2,10→matches id10→existing depth resolver→five-field
+packet. tx=cx-width//2, ty=cy-height//2, pixels right/down positive; e.g.
+(250,350),1000x800 gives -250,-50. Distance mm. Missing selected target outputs
+0,0,0,0,0. Depth-only still invalid. Webcam's existing valid=1,distance=0 remains
+bench-only behavior; Mega competition must gate usable distance. Selection held
+until valid replacement/0 (including reconnect); production --wait-for-mega and
+Mega returned-id checks remain required. 100ms selection resend is Mega-owned;
+300ms numeric timeout Mega-owned, existing Orin heartbeat timeout 1s unchanged.
+
+**Evidence:** PYTHONDONTWRITEBYTECODE=1 venv/bin/python -m unittest discover -s tests:
+54 tests PASS, including original 46. git diff --check PASS. New cases cover nine
+choices, fragments, malformed/version mismatch, heartbeats, missing/ambiguous/
+unreliable targets, auto-state preservation, depth-only gate, full synthetic
+positional grid and mocked real session output. No hardware/recording validation,
+no flash, commit, push or deployment. Pre-existing handoff edits and Thumbs.db
+preserved. TEL runtime not modified.
+
+**Limits / Next Test:** IDs derive from geometric layout/anchors, not YOLO class.
+Full-grid synthetic numbering passes; partial cold-start, tilt, occlusion and
+flow drift are not certified. Existing automatic target-loss reset deferral remains.
+Claude may implement Mega phase2 against docs/operator-selection-v2.md: statuses
+v2, MEGA_TARGET vision ids, returned-id/valid/range/timeout gates. With outputs
+disabled, test each physical hole, covering chosen hole, rapid switches and peer
+restarts before enabling mechanisms. Do not claim competition readiness from host
+suite. See YOLO_Detect_single/docs/operator-selection-v2.md for full contract.

@@ -28,6 +28,7 @@ class VisionSerial:
         self.port = port
         self.baud = baud
         self.enabled = enabled
+        self.selected_target_id = 0
         self.last_message = ""
         self.last_send_time = 0.0
         self.heartbeat_seconds = heartbeat_seconds
@@ -132,6 +133,14 @@ class VisionSerial:
         for line in self._read_lines():
             fields = [field.strip() for field in line.split(",")]
             if len(fields) < 2:
+                continue
+            if fields[0] == "MEGA_TARGET":
+                # Selection is not a heartbeat. Never let malformed input clear
+                # a selection and accidentally restore automatic targeting.
+                if (self.protocol_version == 2 and len(fields) == 3
+                        and fields[1] == "2"
+                        and fields[2] in {"0", "4", "5", "6", "7", "8", "9", "10", "11", "12"}):
+                    self.selected_target_id = int(fields[2])
                 continue
             if fields[0] not in ("MEGA_READY", "MEGA_HEARTBEAT"):
                 continue

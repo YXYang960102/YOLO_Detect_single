@@ -26,6 +26,8 @@ class FakeClock:
 
 class FakeLink:
     def __init__(self, alive=True):
+        self.enabled = False
+        self.selected_target_id = 0
         self.alive = alive
         self.idle_poll_seconds = 0.02
         self.statuses = []

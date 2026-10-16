@@ -121,7 +121,18 @@ class TargetManager:
             TARGET_NORMAL,
         )
 
-    def select(self, holes, red_target, frame_width, frame_height):
+    def select(self, holes, red_target, frame_width, frame_height,
+               selected_target_id=0):
+        if selected_target_id != 0:
+            # Explicit operator choice does not mutate automatic lock/shot
+            # state. Missing, ambiguous or unreliable choices never fall back.
+            matches = [hole for hole in holes
+                       if hole.get("id") == selected_target_id]
+            if (selected_target_id not in range(4, 13) or len(matches) != 1
+                    or not self._is_reliable(matches[0], frame_width, frame_height)):
+                return None
+            return dict(matches[0], target_type=TARGET_NORMAL)
+
         desired, target_type = self._find_desired_target(
             holes,
             red_target,

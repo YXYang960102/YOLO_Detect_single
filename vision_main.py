@@ -508,6 +508,8 @@ def run_vision_session(
                     entry[1] += 1
 
                 while True:
+                    if not require_mega and serial_tx.enabled:
+                        serial_tx.poll_mega()
                     if require_mega:
                         if not serial_tx.mega_alive():
                             print("MEGA heartbeat timed out; returning to WAIT_MEGA")
@@ -593,7 +595,8 @@ def run_vision_session(
                         _record_stage("red_target", time.perf_counter() - _t0)
 
                         target_hole = target_manager.select(
-                            holes, red_target, width, height
+                            holes, red_target, width, height,
+                            selected_target_id=serial_tx.selected_target_id,
                         )
 
                         target_id = target_hole["id"] if target_hole is not None else 0
@@ -704,7 +707,7 @@ def run_vision_session(
 
 def main():
     args = parse_args()
-    serial_tx = VisionSerial(port=args.serial_port, enabled=args.serial)
+    serial_tx = VisionSerial(port=args.serial_port, enabled=args.serial, protocol_version=2)
 
     try:
         if not args.wait_for_mega:
