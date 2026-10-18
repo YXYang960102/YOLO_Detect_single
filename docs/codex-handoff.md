@@ -1769,3 +1769,62 @@ v2, MEGA_TARGET vision ids, returned-id/valid/range/timeout gates. With outputs
 disabled, test each physical hole, covering chosen hole, rapid switches and peer
 restarts before enabling mechanisms. Do not claim competition readiness from host
 suite. See YOLO_Detect_single/docs/operator-selection-v2.md for full contract.
+
+## 2026-10-18 — Claude Code: depth ring moved outside the hole opening; D435 firmware + self-calibration
+
+**User Request:** on the bench, the vision distance kept dropping to
+`Depth: invalid / unavailable` and read wrong. Jeremy asked Claude to
+commit the fix directly. This repo is Codex-owned, so Codex should review
+the change.
+
+**Discussion Result / Why:**
+- The ring was 0.60–1.10 of the box half-size. With the YOLO box on the
+  hole opening, the 0.60–1.00 part lies inside the opening, where the net
+  returns little or no depth. The board was therefore only ≈ 25% of the
+  ring area: (1.1² − 1²)/(1.1² − 0.6²).
+- `DEPTH_MIN_VALID_FRACTION` is 0.20, so small changes in the box flipped
+  the distance between valid and invalid.
+- The hard-coded ring is now **1.15–1.60**. Jeremy measured on the Orin:
+  valid 0.66–1.00, and `Range` 1408 mm against the click tool's
+  1391/1397 mm (bench poster).
+
+**Changed:** `config.py`: `DEPTH_RING_INNER_RATIO` 0.60 → 1.15 and
+`DEPTH_RING_OUTER_RATIO` 1.10 → 1.60, with a comment. No logic changed.
+The `hole_inner_ratio` 0.35 < inner check still holds.
+
+**Hardware done the same day (not code):**
+- D435 s/n 001622072100 firmware 5.11.1.100 → **5.17.3.10**, the version
+  librealsense 2.58.3 recommends.
+- Under 5.11, the whole aligned depth image sometimes went invalid until
+  the lens was covered.
+- Then On-Chip calibration (health 0.48, written) and Tare at 1447 mm
+  (written).
+- Flat-wall error at 1.443 m went from −3.4% to +0.3%. Valid pixels went
+  from 93% to 96%.
+- These were done with a standalone `~/d435_calib.py` on the Orin, which
+  is not in this repo.
+
+**Open for Codex:**
+1. YOLO detected a person's head (dark, round) as a hole, and the layout
+   gave it id **10** (= Dashboard key 1).
+   - Suggested gates: box size against the median hole size; membership
+     in the 3×3 grid; and depth sign (a real opening reads farther than,
+     or invalid against, its ring; a head reads nearer).
+   - Also add hard negatives (people) to training.
+   - Recommended before competition.
+2. Optional: print why depth is invalid (samples / fraction / detector),
+   and a whole-frame depth-dropout watchdog that re-applies the emitter
+   and exposure or reopens the camera. Lower priority now that firmware
+   5.17 hasn't shown the dropout.
+
+**Evidence:**
+- `python -m unittest discover -s tests`: 54 tests OK on the Mac venv.
+- Bench results on the Orin as above (Jeremy). Not tested on the real
+  field board.
+
+**Next Test:**
+1. On the Orin: `git checkout config.py && git pull`. The local hand-edit
+   has the same values.
+2. Restart `yolo-vision.service`.
+3. On the real field board, check that distance stays valid while moving
+   between positions, and that `Range` matches the tape.

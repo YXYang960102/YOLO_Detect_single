@@ -49,10 +49,16 @@ CAMERA_RECOVERY_RESET_SECONDS = 10.0
 # RGB-D distance estimation. All depth and serial distance values are mm.
 # The ring samples the board around a detected hole instead of the empty
 # center of the hole, which is normally more stable for this target.
+# Ratios are of the detection box's half-size. 1.15-1.60 (2026-10-18, was
+# 0.60-1.10): with the box on the hole opening, the old ring was mostly
+# inside the opening (the net returns little or no depth), so the board was
+# only ~25% of the ring against DEPTH_MIN_VALID_FRACTION 0.20 and the
+# distance came and went with small box changes. Measured on the Orin with
+# the new ring: valid 0.66-1.00 (Jeremy, bench poster at 1.44 m).
 DEPTH_MIN_MM = 200
 DEPTH_MAX_MM = 8000
-DEPTH_RING_INNER_RATIO = 0.60
-DEPTH_RING_OUTER_RATIO = 1.10
+DEPTH_RING_INNER_RATIO = 1.15
+DEPTH_RING_OUTER_RATIO = 1.60
 DEPTH_MIN_VALID_SAMPLES = 40
 DEPTH_MIN_VALID_FRACTION = 0.20
 DEPTH_MAD_SCALE = 3.5
