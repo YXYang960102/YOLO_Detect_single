@@ -188,6 +188,52 @@ class DepthEstimator:
 
         return float(np.median(values)), int(values.size)
 
+    def ring_coverage(self, depth_mm, box, sectors=8, good_fraction=0.5):
+        """Dashboard view of the depth ring (2026-10-28), display only.
+
+        Returns (percent, mask) or None: percent = usable ring pixels /
+        all ring pixels * 100, rounded (the same ring and the same usable
+        rule as the distance); mask bit k = sector k has depth, i.e. at
+        least good_fraction of its pixels are usable. Sector k covers the
+        angle k * 360 / sectors +- half a sector, measured on screen from
+        the right going clockwise (image y points down): with 8 sectors,
+        0 right, 2 below, 4 left, 6 above. A sector cut off by the image
+        edge counts only its pixels inside the image; one with none has
+        no depth.
+        """
+        if depth_mm is None or box is None:
+            return None
+        height, width = depth_mm.shape[:2]
+        x1, y1, x2, y2 = [float(value) for value in box]
+        cx, cy = (x1 + x2) * 0.5, (y1 + y2) * 0.5
+        rx, ry = max((x2 - x1) * 0.5, 1.0), max((y2 - y1) * 0.5, 1.0)
+        r_max = self.outer_ratio
+        left = max(0, int(np.floor(cx - rx * r_max)))
+        right = min(width, int(np.ceil(cx + rx * r_max)) + 1)
+        top = max(0, int(np.floor(cy - ry * r_max)))
+        bottom = min(height, int(np.ceil(cy + ry * r_max)) + 1)
+        if left >= right or top >= bottom:
+            return None
+        yy, xx = np.ogrid[top:bottom, left:right]
+        nx, ny = (xx - cx) / rx, (yy - cy) / ry
+        radius = np.sqrt(nx ** 2 + ny ** 2)
+        region = (radius >= self.inner_ratio) & (radius <= r_max)
+        total = int(region.sum())
+        if total == 0:
+            return None
+        depth = depth_mm[top:bottom, left:right]
+        usable = region & np.isfinite(depth) & (depth >= self.min_mm) & (depth <= self.max_mm)
+        step = 2.0 * np.pi / sectors
+        angle = np.mod(np.arctan2(ny, nx) + step * 0.5, 2.0 * np.pi)
+        sector = np.minimum((angle // step).astype(np.int32), sectors - 1)
+        mask = 0
+        for k in range(sectors):
+            in_sector = region & (sector == k)
+            count = int(in_sector.sum())
+            if count and int((usable & in_sector).sum()) >= good_fraction * count:
+                mask |= 1 << k
+        return int(round(100.0 * int(usable.sum()) / total)), mask
+
     def _ring_values(self, depth_mm, box):
         return self._sample_region(depth_mm, box, self.inner_ratio, self.outer_ratio)
 

@@ -89,6 +89,38 @@ class DepthEstimatorTest(unittest.TestCase):
 
         self.assertIsNone(measurement)
 
+    # Dashboard ring view (2026-10-28): share of usable ring pixels and the
+    # 8 sectors with depth (0 = right, clockwise on screen, y down).
+    def test_ring_coverage_full_and_none(self):
+        estimator = DepthEstimator(inner_ratio=0.60, outer_ratio=1.10)
+        self.assertEqual(estimator.ring_coverage(make_depth(), BOX), (100, 0xFF))
+        depth = invalidate_ring(make_depth())
+        self.assertEqual(estimator.ring_coverage(depth, BOX), (0, 0))
+        self.assertIsNone(estimator.ring_coverage(None, BOX))
+        self.assertIsNone(estimator.ring_coverage(depth, None))
+
+    def test_ring_coverage_right_half_missing(self):
+        estimator = DepthEstimator(inner_ratio=0.60, outer_ratio=1.10)
+        depth = make_depth()
+        depth[:, CENTER[0] + 1:] = 0.0          # no depth right of center
+        percent, mask = estimator.ring_coverage(depth, BOX)
+        self.assertTrue(48 <= percent <= 52)
+        # Left side (sectors 3, 4, 5) has depth; right (7, 0, 1) has none;
+        # straight up / down (6, 2) are split in half.
+        self.assertEqual(mask & 0b10111011, 0b00111000)
+        depth = make_depth()
+        depth[CENTER[1] + 1:, :] = np.nan        # nothing below center
+        _, mask = estimator.ring_coverage(depth, BOX)
+        self.assertEqual(mask & 0b11101110, 0b11100000)   # 5, 6, 7 (above) only
+
+    def test_ring_coverage_clipped_by_the_frame_edge(self):
+        estimator = DepthEstimator(inner_ratio=0.60, outer_ratio=1.10)
+        box = (340, 150, 440, 250)              # right part outside the image
+        percent, mask = estimator.ring_coverage(make_depth(), box)
+        self.assertEqual(percent, 100)           # of the pixels in the image
+        self.assertEqual(mask & 1, 0)            # sector 0 has no pixels
+        self.assertEqual(mask & (1 << 4), 1 << 4)
+
 
 if __name__ == "__main__":
     unittest.main()

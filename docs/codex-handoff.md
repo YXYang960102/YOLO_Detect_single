@@ -1872,3 +1872,31 @@ Jeremy chose that Claude does the Orin side, together with the Mega v3
 3. Cover a column / turn the camera away: the arrow and `valid=2` should
    appear, and the turret should turn toward the hole.
 4. Check `d` on a bonus hole for a usable ring.
+
+## 2026-10-28 — Claude Code: depth-ring coverage for the Dashboard (frame fields 7–8)
+
+**User Request:** show the depth sampling ring in the TEL Dashboard, wired
+and wireless (Jeremy chose an 8-sector schematic over a video stream).
+
+**Changed:** `serial_tx.send(..., ring=None)` appends `ring_pct,ring_sectors`
+under protocol 3 (`-1,0` when none). `vision_main` computes them with
+`DepthEstimator.ring_coverage` for a real sighting (valid 1) only.
+
+**Added:** `DepthEstimator.ring_coverage(depth_mm, box, sectors, good_fraction)`;
+`config.DEPTH_RING_SECTORS = 8`, `DEPTH_RING_SECTOR_GOOD_FRACTION = 0.5`;
+stage timing `depth_ring`.
+
+**Calculation:** see `docs/operator-selection-v3.md` ("Depth ring for the
+Dashboard"): pct = round(100 × usable / ring pixels); sector k =
+floor((atan2(y, x) + 22.5°) mod 360° / 45°) in box-normalized coordinates,
+image y down (clockwise on screen, 0 = right).
+
+**Impact:** needs TEL_Robot_2026 Mega `8e1e720` or later (6 or 8 fields);
+the Mega on `d48b10d` (never pushed) would refuse 8-field frames. Protocol
+version unchanged (3). Distance logic unchanged.
+
+**Evidence:** 65/65 unittest (ring full / none / half / frame-edge, 8-field
+packets). No Jetson or camera run.
+
+**Next Test:** with `d` on, the Dashboard's red sectors match the red side
+of the Orin overlay.

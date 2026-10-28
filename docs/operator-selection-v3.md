@@ -50,7 +50,26 @@ still behaves exactly as v2; the existing v2 tests run unchanged.
   - The Mega stops following predictions 3 s after the first one, unless
     the hole is really seen or the selection changes.
 
-## Test overlay
+## Depth ring for the Dashboard (2026-10-28)
+
+The frame may end with two more fields, still protocol 3:
+`tx,ty,distance,target_id,valid,seen_mask,ring_pct,ring_sectors`.
+`vision_main` always sends all 8; the Mega (TEL_Robot_2026 `8e1e720` and
+later) accepts 6 or 8.
+- `ring_pct`: usable pixels / all pixels of the target's depth sampling
+  ring × 100, rounded; −1 = none (no real sighting, a predicted position,
+  no depth frame).
+- `ring_sectors`: bit k = sector k has depth (≥
+  `DEPTH_RING_SECTOR_GOOD_FRACTION` 0.5 of its ring pixels usable). Sector
+  k covers k × 45° ± 22.5°, measured on screen from the right going
+  clockwise (image y is down): 0 right, 2 below, 4 left, 6 above.
+- Computed by `DepthEstimator.ring_coverage` with the same ring and usable
+  rule as the distance. Display only: it doesn't change the distance.
+- Example: ring 62 % usable, nothing below-left → `…,152,62,227`
+  (227 = 0b11100011: sectors 2, 3, 4 have no depth).
+- Cost 0.4–1.9 ms per frame on a Mac (80–200 px boxes), every frame with a
+  real sighting.
+
 
 `--show-depth-ring` (or key `d` in the display window) draws the target's
 depth sampling ring exactly as `depth_distance` samples it: the ellipse

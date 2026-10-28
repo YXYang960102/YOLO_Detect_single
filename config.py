@@ -69,6 +69,11 @@ DEPTH_RING_INNER_RATIO = 1.15
 DEPTH_RING_OUTER_RATIO = 1.60
 DEPTH_MIN_VALID_SAMPLES = 40
 DEPTH_MIN_VALID_FRACTION = 0.20
+# Dashboard ring view (2026-10-28): the ring is cut into 8 sectors (0 =
+# right, clockwise on screen); a sector counts as "has depth" when at least
+# this share of its pixels is usable. Display only, not the distance.
+DEPTH_RING_SECTORS = 8
+DEPTH_RING_SECTOR_GOOD_FRACTION = 0.5
 DEPTH_MAD_SCALE = 3.5
 DEPTH_SMOOTHING = 0.25
 

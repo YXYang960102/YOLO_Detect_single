@@ -30,6 +30,8 @@ from config import (
     DEPTH_MIN_VALID_SAMPLES,
     DEPTH_RING_INNER_RATIO,
     DEPTH_RING_OUTER_RATIO,
+    DEPTH_RING_SECTOR_GOOD_FRACTION,
+    DEPTH_RING_SECTORS,
     DEPTH_SMOOTHING,
     IMAGE_SIZE,
     MAX_SHOTS_PER_HOLE,
@@ -670,6 +672,7 @@ def run_vision_session(
                         depth_measurement = None
                         tx, ty, distance, target_id, valid = 0, 0, 0, 0, 0
                         seen_mask = 0
+                        ring = None
                     else:
                         _t0 = time.perf_counter()
                         holes = assign_ids(raw_holes, width)
@@ -721,7 +724,19 @@ def run_vision_session(
                         )
                         _record_stage("depth_resolve", time.perf_counter() - _t0)
 
-                    serial_tx.send(tx, ty, distance, target_id, valid, seen_mask=seen_mask)
+                        # Dashboard ring view (2026-10-28): only for a real
+                        # sighting (valid 1), never a predicted position.
+                        ring = None
+                        if v3 and valid == 1 and target_hole.get("box") is not None:
+                            _t0 = time.perf_counter()
+                            ring = depth_estimator.ring_coverage(
+                                camera_frame.depth_mm, target_hole["box"],
+                                sectors=DEPTH_RING_SECTORS,
+                                good_fraction=DEPTH_RING_SECTOR_GOOD_FRACTION,
+                            )
+                            _record_stage("depth_ring", time.perf_counter() - _t0)
+
+                    serial_tx.send(tx, ty, distance, target_id, valid, seen_mask=seen_mask, ring=ring)
 
                     if not args.no_display:
                         draw_debug(
