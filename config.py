@@ -16,6 +16,14 @@ GRID_MEMORY_MAX_DISTANCE_RATIO = 0.85
 GRID_MEMORY_SMOOTHING = 0.25
 GRID_GEOMETRY_MAX_ERROR_RATIO = 0.75
 GRID_GEOMETRY_ANCHOR_WEIGHT = 0.35
+# Protocol v3 (2026-10-27): when the operator's hole is out of view, its
+# position is predicted from the holes in view with the same affine grid
+# fit the geometry assignment uses (hole_grid.predict_hole_position). Needs
+# at least this many identified holes, a fit within
+# GRID_GEOMETRY_MAX_ERROR_RATIO, and a prediction no more than
+# GRID_PREDICT_MAX_OUTSIDE_RATIO frame widths / heights outside the frame.
+GRID_PREDICT_MIN_HOLES = 3
+GRID_PREDICT_MAX_OUTSIDE_RATIO = 1.0
 GRID_TRACKER_MIN_MATCHES = 3
 GRID_TRACKER_MAX_ERROR_RATIO = 0.65
 # Downscale factor applied only inside GridTracker's optical-flow motion

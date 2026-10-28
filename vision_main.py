@@ -3,6 +3,7 @@ import gc
 import time
 
 import cv2
+import numpy as np
 
 from camera_source import RecoverableCameraError, create_camera
 from config import (
@@ -107,6 +108,7 @@ def resolve_distance_and_validity(
     intrinsics,
     depth_estimator,
     distance_mode,
+    keep_valid_without_depth=False,
 ):
     """Returns (distance_mm, valid, depth_measurement) for the selected target.
 
@@ -122,6 +124,10 @@ def resolve_distance_and_validity(
     if target_hole.get("detector") == "depth":
         return 0, 0, None
 
+    # Protocol v3: a predicted (out-of-view) position is aim-only.
+    if target_hole.get("predicted"):
+        return 0, 2, None
+
     if depth_mm is None:
         # Preserve the original webcam behavior when no depth stream exists:
         # target coordinates are still valid, distance is 0.
@@ -135,7 +141,11 @@ def resolve_distance_and_validity(
         target_id=target_hole["id"],
     )
     if depth_measurement is None:
-        return 0, 0, None
+        # v3 (keep_valid_without_depth): the hole is still seen, only its
+        # depth failed this frame -- keep tx / ty valid with distance 0, so
+        # the Mega keeps the turret locked and its steadied shot distance
+        # (it never fires without a distance). v2: invalid, as before.
+        return (0, 1, None) if keep_valid_without_depth else (0, 0, None)
 
     distance_value = (
         depth_measurement.range_mm
@@ -143,6 +153,59 @@ def resolve_distance_and_validity(
         else depth_measurement.z_mm
     )
     return int(round(distance_value)), 1, depth_measurement
+
+
+def draw_depth_ring(frame, target_hole, depth_mm, depth_estimator):
+    """Test-only overlay (key 'd' / --show-depth-ring, 2026-10-27): the
+    target's depth sampling ring exactly as depth_distance samples it -- the
+    ellipse annulus inner_ratio..outer_ratio times the box half-size -- with
+    every sampled pixel tinted green (usable depth) or red (no / out-of-
+    range depth). Shows at a glance whether the ring sits on the board and
+    where the depth is missing. Costs a few ms per frame."""
+    if target_hole is None or target_hole.get("box") is None or depth_estimator is None:
+        return
+    height, width = frame.shape[:2]
+    x1, y1, x2, y2 = [float(v) for v in target_hole["box"]]
+    cx, cy = (x1 + x2) * 0.5, (y1 + y2) * 0.5
+    rx, ry = max((x2 - x1) * 0.5, 1.0), max((y2 - y1) * 0.5, 1.0)
+    inner, outer = depth_estimator.inner_ratio, depth_estimator.outer_ratio
+    left = max(0, int(np.floor(cx - rx * outer)))
+    right = min(width, int(np.ceil(cx + rx * outer)) + 1)
+    top = max(0, int(np.floor(cy - ry * outer)))
+    bottom = min(height, int(np.ceil(cy + ry * outer)) + 1)
+    if left < right and top < bottom:
+        yy, xx = np.ogrid[top:bottom, left:right]
+        radius = np.sqrt(((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2)
+        region = (radius >= inner) & (radius <= outer)
+        patch = frame[top:bottom, left:right]
+        if depth_mm is not None and depth_mm.shape[:2] == frame.shape[:2]:
+            depth = depth_mm[top:bottom, left:right]
+            usable = (np.isfinite(depth) & (depth >= depth_estimator.min_mm)
+                      & (depth <= depth_estimator.max_mm))
+            for mask, color in ((region & usable, (0, 255, 0)), (region & ~usable, (0, 0, 255))):
+                if mask.any():
+                    patch[mask] = (patch[mask] * 0.5 + np.array(color) * 0.5).astype(np.uint8)
+            total = int(region.sum())
+            good = int((region & usable).sum())
+            if total:
+                cv2.putText(frame, f"ring {good}/{total} = {good / total:.2f}",
+                            (int(cx - rx * outer), max(15, int(cy - ry * outer) - 6)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+    center = (int(round(cx)), int(round(cy)))
+    for ratio in (inner, outer):
+        cv2.ellipse(frame, center, (int(round(rx * ratio)), int(round(ry * ratio))),
+                    0, 0, 360, (0, 255, 255), 1)
+
+
+def draw_predicted_target(frame, target_hole):
+    """v3: an out-of-view selected hole's predicted position -- an arrow
+    from the frame center toward it (clipped to the frame) and its id."""
+    height, width = frame.shape[:2]
+    px = int(min(max(target_hole["cx"], 12), width - 12))
+    py = int(min(max(target_hole["cy"], 12), height - 12))
+    cv2.arrowedLine(frame, (width // 2, height // 2), (px, py), (255, 0, 255), 3, tipLength=0.08)
+    cv2.putText(frame, f"PRED {target_hole['id']}", (max(5, px - 70), max(20, py - 10)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
 
 
 def draw_debug(
@@ -157,6 +220,9 @@ def draw_debug(
     depth_measurement=None,
     show_overlay=True,
     fps=0.0,
+    depth_mm=None,
+    depth_estimator=None,
+    show_depth_ring=False,
 ):
     height, width = frame.shape[:2]
     frame_center_x = width // 2
@@ -218,6 +284,11 @@ def draw_debug(
             2,
         )
 
+    if target_hole is not None and target_hole.get("predicted"):
+        draw_predicted_target(frame, target_hole)
+    elif show_depth_ring:
+        draw_depth_ring(frame, target_hole, depth_mm, depth_estimator)
+
     target_id = target_hole["id"] if target_hole is not None else 0
     target_type = target_hole.get("target_type", TARGET_NONE) if target_hole else TARGET_NONE
     shots = target_manager.shots_for(target_id)
@@ -278,6 +349,16 @@ def draw_debug(
             (0, 255, 255),
             2,
         )
+    elif target_hole is not None and target_hole.get("predicted"):
+        cv2.putText(
+            frame,
+            f"PREDICTED id:{target_hole['id']} (out of view, aim only)",
+            (20, 155),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (255, 0, 255),
+            2,
+        )
     elif target_hole is not None:
         cv2.putText(
             frame,
@@ -319,6 +400,11 @@ def parse_args():
         ),
     )
     parser.add_argument("--no-display", action="store_true")
+    parser.add_argument(
+        "--show-depth-ring",
+        action="store_true",
+        help="test only: draw the target's depth sampling ring (key 'd' toggles)",
+    )
     args = parser.parse_args()
     if args.wait_for_mega and not args.serial:
         parser.error("--wait-for-mega requires --serial")
@@ -493,6 +579,10 @@ def run_vision_session(
                 # (Jeremy wants a truly clean feed option, not just boxes
                 # off). Detection/serial output is unaffected either way.
                 show_overlay = True
+                # Test-only depth-ring overlay (2026-10-27): 'd' toggles,
+                # --show-depth-ring starts with it on. Costs a few ms a
+                # frame; keep it off in matches.
+                show_depth_ring = bool(getattr(args, "show_depth_ring", False))
 
                 # Per-stage timing (2026-10-09): FPS alone doesn't say which
                 # stage got slow when a target is detected (measured: ~13.6
@@ -579,6 +669,7 @@ def run_vision_session(
                         target_hole = None
                         depth_measurement = None
                         tx, ty, distance, target_id, valid = 0, 0, 0, 0, 0
+                        seen_mask = 0
                     else:
                         _t0 = time.perf_counter()
                         holes = assign_ids(raw_holes, width)
@@ -594,10 +685,17 @@ def run_vision_session(
                         red_target = select_red_target(frame, holes, stabilizer)
                         _record_stage("red_target", time.perf_counter() - _t0)
 
+                        # Protocol v3 (2026-10-27): bonus holes selectable, an
+                        # out-of-view choice predicted (aim only), detected
+                        # ids reported, tx / ty kept when only depth fails.
+                        v3 = serial_tx.protocol_version >= 3
                         target_hole = target_manager.select(
                             holes, red_target, width, height,
                             selected_target_id=serial_tx.selected_target_id,
+                            allow_bonus=v3,
+                            predict_missing=v3,
                         )
+                        seen_mask = target_manager.seen_mask(holes, width, height) if v3 else 0
 
                         target_id = target_hole["id"] if target_hole is not None else 0
                         tx = (
@@ -618,11 +716,12 @@ def run_vision_session(
                                 camera_frame.intrinsics,
                                 depth_estimator,
                                 args.distance_mode,
+                                keep_valid_without_depth=v3,
                             )
                         )
                         _record_stage("depth_resolve", time.perf_counter() - _t0)
 
-                    serial_tx.send(tx, ty, distance, target_id, valid)
+                    serial_tx.send(tx, ty, distance, target_id, valid, seen_mask=seen_mask)
 
                     if not args.no_display:
                         draw_debug(
@@ -637,6 +736,9 @@ def run_vision_session(
                             depth_measurement,
                             show_overlay=show_overlay,
                             fps=current_fps_display,
+                            depth_mm=camera_frame.depth_mm,
+                            depth_estimator=depth_estimator,
+                            show_depth_ring=show_depth_ring,
                         )
                         cv2.imshow("Coordinate System RGB-D", frame)
 
@@ -656,6 +758,9 @@ def run_vision_session(
                         if key == ord("o"):
                             show_overlay = not show_overlay
                             print(f"[display] overlay {'ON' if show_overlay else 'OFF'}")
+                        if key == ord("d"):
+                            show_depth_ring = not show_depth_ring
+                            print(f"[display] depth ring {'ON' if show_depth_ring else 'OFF'}")
             except RecoverableCameraError as exc:
                 recoverable_error = exc
             finally:
@@ -707,7 +812,8 @@ def run_vision_session(
 
 def main():
     args = parse_args()
-    serial_tx = VisionSerial(port=args.serial_port, enabled=args.serial, protocol_version=2)
+    # v3 (2026-10-27): deploy together with the matching Mega firmware.
+    serial_tx = VisionSerial(port=args.serial_port, enabled=args.serial, protocol_version=3)
 
     try:
         if not args.wait_for_mega:

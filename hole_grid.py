@@ -9,6 +9,8 @@ from config import (
     GRID_MEMORY_MIN_HOLES,
     GRID_MEMORY_PARTIAL_MAX_HOLES,
     GRID_MEMORY_SMOOTHING,
+    GRID_PREDICT_MAX_OUTSIDE_RATIO,
+    GRID_PREDICT_MIN_HOLES,
     ROWS,
     TOP_ROW_SIZE_RATIO,
 )
@@ -346,6 +348,68 @@ def fit_affine(canonical_points, image_points):
         predicted.append((x, y))
 
     return coeffs, predicted
+
+
+def hole_grid_position(hole_id):
+    """(col, row) of a grid id, the canonical coordinates fit_affine uses:
+    row 0 = the bonus row (ids 1-3), rows 1-3 = the 3x3 grid (ids 4-12)."""
+    zero_based = hole_id - 1
+    return zero_based % COLS, zero_based // COLS
+
+
+def predict_hole_position(holes, hole_id, frame_width, frame_height):
+    """Image (x, y) where grid position `hole_id` should be, from the
+    identified holes in this frame, or None.
+
+    Protocol v3 (2026-10-27): lets the turret turn toward a selected hole
+    that is out of view. Least-squares affine fit of grid (col, row) ->
+    image (x, y) over the other holes (same model as the geometry
+    assignment), then evaluated at the selected hole's (col, row):
+        x = a*col + b*row + c,   y = d*col + e*row + f
+    Refused (None) when:
+      - fewer than GRID_PREDICT_MIN_HOLES other holes have ids;
+      - the target's column (row) is outside the columns (rows) in view and
+        fewer than two columns (rows) are in view (a line of holes can't
+        place another line);
+      - the fit misses its own holes by more than
+        GRID_GEOMETRY_MAX_ERROR_RATIO hole sizes on average;
+      - the prediction lies more than GRID_PREDICT_MAX_OUTSIDE_RATIO frame
+        widths / heights outside the frame.
+    """
+    if hole_id not in range(1, ROWS * COLS + 1):
+        return None
+    known = [h for h in holes
+             if h.get("id") in range(1, ROWS * COLS + 1) and h.get("id") != hole_id]
+    if len(known) < max(3, GRID_PREDICT_MIN_HOLES):
+        return None
+    canonical = [hole_grid_position(h["id"]) for h in known]
+    image = [(float(h["cx"]), float(h["cy"])) for h in known]
+    col, row = hole_grid_position(hole_id)
+    cols_in_view = {c for c, _ in canonical}
+    rows_in_view = {r for _, r in canonical}
+    if col not in cols_in_view and len(cols_in_view) < 2:
+        return None
+    if row not in rows_in_view and len(rows_in_view) < 2:
+        return None
+
+    coeffs, fitted = fit_affine(canonical, image)
+    if coeffs is None:
+        return None
+    scale = hole_size_scale(known)
+    fit_error = np.mean([
+        np.linalg.norm(np.array(actual) - np.array(expected)) / scale
+        for actual, expected in zip(image, fitted)
+    ])
+    if fit_error > GRID_GEOMETRY_MAX_ERROR_RATIO:
+        return None
+
+    x = float(coeffs[0] * col + coeffs[1] * row + coeffs[2])
+    y = float(coeffs[3] * col + coeffs[4] * row + coeffs[5])
+    margin_x = frame_width * GRID_PREDICT_MAX_OUTSIDE_RATIO
+    margin_y = frame_height * GRID_PREDICT_MAX_OUTSIDE_RATIO
+    if not (-margin_x <= x <= frame_width + margin_x and -margin_y <= y <= frame_height + margin_y):
+        return None
+    return x, y
 
 
 def geometry_assignment_score(assignment, holes):

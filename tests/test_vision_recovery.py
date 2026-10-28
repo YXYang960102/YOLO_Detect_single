@@ -28,6 +28,7 @@ class FakeLink:
     def __init__(self, alive=True):
         self.enabled = False
         self.selected_target_id = 0
+        self.protocol_version = 2
         self.alive = alive
         self.idle_poll_seconds = 0.02
         self.statuses = []
@@ -40,7 +41,7 @@ class FakeLink:
         self.statuses.append((status, force))
         return True
 
-    def send(self, tx, ty, distance, target_id, valid, force=False):
+    def send(self, tx, ty, distance, target_id, valid, force=False, seen_mask=0):
         self.packets.append(
             ((tx, ty, distance, target_id, valid), force)
         )

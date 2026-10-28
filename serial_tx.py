@@ -137,9 +137,12 @@ class VisionSerial:
             if fields[0] == "MEGA_TARGET":
                 # Selection is not a heartbeat. Never let malformed input clear
                 # a selection and accidentally restore automatic targeting.
-                if (self.protocol_version == 2 and len(fields) == 3
-                        and fields[1] == "2"
-                        and fields[2] in {"0", "4", "5", "6", "7", "8", "9", "10", "11", "12"}):
+                # v2: 0 / 4-12; v3 (2026-10-27): the bonus holes 1-3 too.
+                allowed = ({str(i) for i in range(0, 13)} if self.protocol_version >= 3
+                           else {"0", "4", "5", "6", "7", "8", "9", "10", "11", "12"})
+                if (self.protocol_version >= 2 and len(fields) == 3
+                        and fields[1] == str(self.protocol_version)
+                        and fields[2] in allowed):
                     self.selected_target_id = int(fields[2])
                 continue
             if fields[0] not in ("MEGA_READY", "MEGA_HEARTBEAT"):
@@ -181,8 +184,13 @@ class VisionSerial:
             self.last_status_send_time = now
         return sent
 
-    def send(self, tx, ty, distance, target_id, valid, force=False):
+    def send(self, tx, ty, distance, target_id, valid, force=False, seen_mask=0):
+        # v3 (2026-10-27): a sixth field, the reliably detected hole ids as
+        # a bitmask (bit id - 1), and valid = 2 for a predicted (aim-only)
+        # position of the selected hole.
         message = f"{int(tx)},{int(ty)},{int(distance)},{int(target_id)},{int(valid)}"
+        if self.protocol_version >= 3:
+            message += f",{int(seen_mask)}"
         now = self.clock()
         changed = message != self.last_message
         heartbeat_due = now - self.last_send_time >= self.heartbeat_seconds

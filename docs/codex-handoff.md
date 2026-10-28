@@ -1828,3 +1828,47 @@ The `hole_inner_ratio` 0.35 < inner check still holds.
 2. Restart `yolo-vision.service`.
 3. On the real field board, check that distance stays valid while moving
    between positions, and that `Range` matches the tape.
+
+## 2026-10-27 — Claude Code: protocol v3 (bonus holes, predicted out-of-view position, detected mask, depth-ring overlay)
+
+**User Request (Jeremy, via the team):**
+- Make the bonus holes selectable.
+- When the chosen hole is out of view, turn toward it using the visible holes.
+- Report every detected hole so the Dashboard can show them.
+- Draw the depth ring on screen for testing.
+
+Jeremy chose that Claude does the Orin side, together with the Mega v3
+(TEL_Robot_2026 dev).
+
+**Changed:**
+- `serial_tx.py`:
+  - v3 accepts `MEGA_TARGET,3,<0..12>`.
+  - `send(..., seen_mask=)` adds a sixth field in v3.
+  - v2 is unchanged.
+- `target_manager.py`:
+  - `select(..., allow_bonus, predict_missing)`. Both default off, which is
+    v2 behavior.
+  - New `seen_mask()`.
+- `hole_grid.py`: new `hole_grid_position`, `predict_hole_position` (affine
+  fit, refusal rules in docs).
+- `config.py`: `GRID_PREDICT_MIN_HOLES = 3`,
+  `GRID_PREDICT_MAX_OUTSIDE_RATIO = 1.0`.
+- `vision_main.py`:
+  - v3 flags from `serial_tx.protocol_version`.
+  - `resolve_distance_and_validity(..., keep_valid_without_depth)`;
+    predicted → `valid=2`.
+  - `draw_depth_ring`, `draw_predicted_target`; key `d`,
+    `--show-depth-ring`.
+  - `main()` uses protocol 3.
+- Tests: `test_vision_recovery.FakeLink` gained `protocol_version` and
+  `seen_mask`; 8 v3 cases were added.
+- Docs: `docs/operator-selection-v3.md`, README run note.
+
+**Evidence:** 62/62 unittest. No Jetson or camera run.
+
+**Next Test:**
+1. Deploy with the v3 Mega.
+2. Select each hole, and Q W E.
+3. Cover a column / turn the camera away: the arrow and `valid=2` should
+   appear, and the turret should turn toward the hole.
+4. Check `d` on a bonus hole for a usable ring.

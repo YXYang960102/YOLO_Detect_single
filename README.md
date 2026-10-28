@@ -212,6 +212,8 @@ For camera-only testing, press `s` to simulate one confirmed shot at the current
 
 Show the full target board once before testing partial views. The vision code remembers stable hole positions when enough holes are visible, then uses that memory only when the frame has very few holes left. Press `r` in the display window to reset the remembered grid after moving the camera a lot. Press `Esc` to close the display window.
 
+Test-only: press `d` (or start with `--show-depth-ring`) to draw the target's depth sampling ring, with usable depth pixels tinted green and missing ones red. It costs a few ms per frame; leave it off in matches. Serial protocol v3 (bonus holes, predicted out-of-view positions, detected-hole mask): see `docs/operator-selection-v3.md`.
+
 With the RealSense source, distance is estimated from the aligned depth image.
 The primary sample is the board-surface ring around the selected hole. A second
 path can sample inside the hole when the ring is invalid, but it remains disabled

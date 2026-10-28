@@ -1,3 +1,4 @@
+from hole_grid import predict_hole_position
 from config import (
     GENERAL_TARGET_CONFIDENCE,
     GENERAL_TARGET_STABLE_FRAMES,
@@ -121,17 +122,50 @@ class TargetManager:
             TARGET_NORMAL,
         )
 
+    def seen_mask(self, holes, frame_width, frame_height):
+        """Protocol v3: bit (id - 1) set for every reliable RGB-detected hole
+        in this frame (ids 1-12; depth-only detections never count)."""
+        mask = 0
+        for hole in holes:
+            if hole.get("detector") == "depth":
+                continue
+            if self._is_reliable(hole, frame_width, frame_height):
+                mask |= 1 << (hole["id"] - 1)
+        return mask
+
     def select(self, holes, red_target, frame_width, frame_height,
-               selected_target_id=0):
+               selected_target_id=0, allow_bonus=False, predict_missing=False):
         if selected_target_id != 0:
             # Explicit operator choice does not mutate automatic lock/shot
-            # state. Missing, ambiguous or unreliable choices never fall back.
+            # state. Missing, ambiguous or unreliable choices never fall back
+            # to another hole. Protocol v3 (allow_bonus / predict_missing,
+            # 2026-10-27): the bonus holes 1-3 can be chosen, and a choice
+            # that is not reliably in view comes back as a PREDICTED target
+            # (its expected position from the holes in view, "predicted":
+            # True, no box) -- aim-only, never a lock or a shot.
+            allowed = range(1, 13) if allow_bonus else range(4, 13)
+            if selected_target_id not in allowed:
+                return None
             matches = [hole for hole in holes
                        if hole.get("id") == selected_target_id]
-            if (selected_target_id not in range(4, 13) or len(matches) != 1
-                    or not self._is_reliable(matches[0], frame_width, frame_height)):
+            if len(matches) > 1:
                 return None
-            return dict(matches[0], target_type=TARGET_NORMAL)
+            if matches and self._is_reliable(matches[0], frame_width, frame_height):
+                return dict(matches[0], target_type=TARGET_NORMAL)
+            if not predict_missing:
+                return None
+            position = predict_hole_position(holes, selected_target_id, frame_width, frame_height)
+            if position is None:
+                return None
+            return {
+                "id": selected_target_id,
+                "cx": int(round(position[0])),
+                "cy": int(round(position[1])),
+                "box": None,
+                "conf": 0.0,
+                "predicted": True,
+                "target_type": TARGET_NORMAL,
+            }
 
         desired, target_type = self._find_desired_target(
             holes,
