@@ -170,10 +170,13 @@ class ProtocolV3Test(unittest.TestCase):
     def test_v3_packet_has_the_seen_mask(self):
         link, _ = self.link()
         link.send(-250, -50, 2480, 8, 1, seen_mask=0b100110000, force=True)
-        self.assertEqual(link.serial.messages[-1], b"-250,-50,2480,8,1,304,-1,0\n")
+        self.assertEqual(link.serial.messages[-1], b"-250,-50,2480,8,1,304,-1,0,0\n")
         # 2026-10-28: the depth ring's share and sectors for the Dashboard.
         link.send(-250, -50, 2480, 8, 1, seen_mask=304, ring=(62, 0b11100011), force=True)
-        self.assertEqual(link.serial.messages[-1], b"-250,-50,2480,8,1,304,62,227\n")
+        self.assertEqual(link.serial.messages[-1], b"-250,-50,2480,8,1,304,62,227,0\n")
+        # 2026-10-31: the lit bonus hole (vision id 1-3) as field 9.
+        link.send(-250, -50, 2480, 8, 1, seen_mask=304, ring=(62, 0b11100011), lit_id=2, force=True)
+        self.assertEqual(link.serial.messages[-1], b"-250,-50,2480,8,1,304,62,227,2\n")
         v2 = VisionSerial(enabled=False, protocol_version=2, clock=FakeClock())
         v2.enabled = True
         v2.serial = FakeSerial()
@@ -259,4 +262,4 @@ class ProtocolV3Test(unittest.TestCase):
                 camera_factory=lambda **kw: camera)
         mask = sum(1 << (i - 1) for i in (4, 5, 7, 8, 10, 11))
         # Predicted: no ring data (-1, 0).
-        self.assertIn(f"500,-150,0,6,2,{mask},-1,0\n".encode(), link.serial.messages)
+        self.assertIn(f"500,-150,0,6,2,{mask},-1,0,0\n".encode(), link.serial.messages)

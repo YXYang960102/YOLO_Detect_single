@@ -41,7 +41,7 @@ class FakeLink:
         self.statuses.append((status, force))
         return True
 
-    def send(self, tx, ty, distance, target_id, valid, force=False, seen_mask=0, ring=None):
+    def send(self, tx, ty, distance, target_id, valid, force=False, seen_mask=0, ring=None, lit_id=0):
         self.packets.append(
             ((tx, ty, distance, target_id, valid), force)
         )

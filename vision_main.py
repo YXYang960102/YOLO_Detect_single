@@ -673,6 +673,7 @@ def run_vision_session(
                         tx, ty, distance, target_id, valid = 0, 0, 0, 0, 0
                         seen_mask = 0
                         ring = None
+                        lit_id = 0
                     else:
                         _t0 = time.perf_counter()
                         holes = assign_ids(raw_holes, width)
@@ -686,6 +687,12 @@ def run_vision_session(
 
                         _t0 = time.perf_counter()
                         red_target = select_red_target(frame, holes, stabilizer)
+                        # The lit bonus hole (2026-10-31), reported to the
+                        # Mega whatever the target: its full auto shoots it
+                        # first. select_red_target is already stabilized.
+                        lit_id = (red_target["id"]
+                                  if red_target is not None and red_target["id"] in RED_TARGET_IDS
+                                  else 0)
                         _record_stage("red_target", time.perf_counter() - _t0)
 
                         # Protocol v3 (2026-10-27): bonus holes selectable, an
@@ -736,7 +743,8 @@ def run_vision_session(
                             )
                             _record_stage("depth_ring", time.perf_counter() - _t0)
 
-                    serial_tx.send(tx, ty, distance, target_id, valid, seen_mask=seen_mask, ring=ring)
+                    serial_tx.send(tx, ty, distance, target_id, valid, seen_mask=seen_mask,
+                                   ring=ring, lit_id=lit_id)
 
                     if not args.no_display:
                         draw_debug(

@@ -1900,3 +1900,23 @@ packets). No Jetson or camera run.
 
 **Next Test:** with `d` on, the Dashboard's red sectors match the red side
 of the Orin overlay.
+
+## 2026-10-31 — Claude Code: frame field 9 `lit_id` (lit bonus hole for the Mega's full auto)
+
+**User Request:** in full auto a lit bonus box comes first. The Mega now
+pins holes in full auto, so the Orin's own red-target preference no longer
+decides; the Mega has to be told.
+
+**Changed:**
+- `serial_tx.send(..., lit_id=0)` appends `lit_id` under protocol 3, so the
+  frame has 9 fields.
+- `vision_main` sets `lit_id` from `select_red_target` (a stabilized red
+  ring) when its id is in `RED_TARGET_IDS` (1–3), else 0; it is 0 on the
+  depth-only branch.
+- Tests updated for 9 fields, plus a `lit_id=2` packet.
+
+**Impact:** needs TEL_Robot_2026 dev with 9-field parsing (the commit after
+40ba523). An older Mega refuses 9-field frames, so deploy them together.
+
+**Evidence:** 65/65 unittest. No Jetson run; the red-ring detection itself
+is unchanged.

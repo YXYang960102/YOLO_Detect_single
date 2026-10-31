@@ -81,6 +81,18 @@ annulus `DEPTH_RING_INNER_RATIO`…`DEPTH_RING_OUTER_RATIO` × the box half-size
   `PRED <id>`.
 - It costs a few ms per frame. Keep it off for matches.
 
+## Lit bonus hole for the Mega (2026-10-31)
+
+A ninth field, still protocol 3:
+`tx,ty,distance,target_id,valid,seen_mask,ring_pct,ring_sectors,lit_id`.
+- `lit_id`: the lit (red-ring) bonus hole that `select_red_target` sees
+  (vision id 1–3; 0 = none).
+- It is sent whatever the target is. When the Mega has pinned another hole
+  (its full auto cycle: 3 balls per hole), it still learns that a bonus box
+  lit up, and serves it first with 3 balls.
+- `vision_main` always sends 9 fields. The Mega (TEL_Robot_2026 dev,
+  2026-10-31) accepts 6, 8 or 9.
+
 ## Evidence
 
 - `venv/bin/python -m unittest discover -s tests`: 62 tests, OK. That is the

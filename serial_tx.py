@@ -184,18 +184,20 @@ class VisionSerial:
             self.last_status_send_time = now
         return sent
 
-    def send(self, tx, ty, distance, target_id, valid, force=False, seen_mask=0, ring=None):
+    def send(self, tx, ty, distance, target_id, valid, force=False, seen_mask=0, ring=None, lit_id=0):
         # v3 (2026-10-27): a sixth field, the reliably detected hole ids as
         # a bitmask (bit id - 1), and valid = 2 for a predicted (aim-only)
         # position of the selected hole. 2026-10-28: then ring_pct,
         # ring_sectors for the Dashboard -- the target's depth ring usable
         # share 0-100 (-1 = none) and its sectors with depth (bit k, 0 =
-        # right, clockwise); ring = (percent, mask) or None. The Mega takes
-        # 6 or 8 fields.
+        # right, clockwise); ring = (percent, mask) or None. 2026-10-31: then
+        # lit_id, the lit (red-ring) bonus hole seen, vision id 1-3 or 0 --
+        # whatever the target is, so the Mega's full auto can serve it
+        # first. The Mega takes 6, 8 or 9 fields (TEL_Robot_2026 dev).
         message = f"{int(tx)},{int(ty)},{int(distance)},{int(target_id)},{int(valid)}"
         if self.protocol_version >= 3:
             ring_pct, ring_sectors = ring if ring is not None else (-1, 0)
-            message += f",{int(seen_mask)},{int(ring_pct)},{int(ring_sectors)}"
+            message += f",{int(seen_mask)},{int(ring_pct)},{int(ring_sectors)},{int(lit_id)}"
         now = self.clock()
         changed = message != self.last_message
         heartbeat_due = now - self.last_send_time >= self.heartbeat_seconds
