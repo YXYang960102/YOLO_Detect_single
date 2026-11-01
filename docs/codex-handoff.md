@@ -1967,3 +1967,71 @@ frame:
   if needed).
 - Use the new camera_* times to decide step 3 (camera read + align on a
   second thread).
+
+## 2026-11-01 — Claude Code: branch camera-process (RealSense capture in its own process)
+
+**User Request:** make the Orin use more of its compute. Jeremy approved
+writing it on a branch: pull it on the Orin, and go back to main if it is
+worse or breaks.
+
+**Discussion Result:**
+- At 19 fps the main loop is ~52 ms per frame on one core, and
+  RealSense align is 20.2 ms of it.
+- A thread doesn't help: `align_thread_check.py` measured the main
+  thread at 49 % beside align, so align holds the GIL.
+- A separate process has its own GIL.
+
+**Added:**
+- `camera_process.py`:
+  - `ProcessCamera` has the same interface as `RealSenseCamera`.
+  - The child is spawned (not forked: the main process already holds
+    CUDA / PyTorch). It runs `RealSenseCamera.read()` and writes color +
+    depth + a header (seq, timestamp, the child's timings) into one of two
+    shared-memory slots under that slot's lock, then sends
+    `("frame", slot)`.
+  - The main `read()` takes the newest slot and copies it out under the
+    lock. It only returns a frame newer than the last one (header seq).
+  - Errors: the child reports `unavailable` / `read` / `fatal`. The main
+    process raises `CameraUnavailableError` / `CameraReadError` /
+    `RuntimeError`, so the existing camera recovery and WAIT_MEGA flow are
+    unchanged.
+  - The child stops on "stop", on its parent's death (getppid) or on an
+    error, and ignores Ctrl+C. `close()` asks it to stop, then terminates
+    or kills it.
+  - `create_process_camera()` takes the same arguments as `create_camera`;
+    the OpenCV webcam stays in-process.
+- `config.CAMERA_IN_SEPARATE_PROCESS = True`; False = exactly main's
+  in-process camera.
+- `vision_main.main()` passes the factory to `run_vision_session`.
+- `timing:` now shows `camera_wait` / `camera_copy` (main loop),
+  `camera_align` / `camera_child_*` (child, off the loop).
+- `tests/test_camera_process.py`: a fake RealSense in the child. Covers:
+  - every frame has color and depth from the same frame, in order;
+  - the frame is a copy;
+  - the newest frame after a slow loop;
+  - close stops the child;
+  - unavailable / crash at open;
+  - read error;
+  - wrong size;
+  - killed child → read error.
+
+**Evidence:**
+- 74/74 unittest on the Mac venv (65 + 9).
+- Ad-hoc stress at 1280×720 (scratchpad): 104 frames, 0 torn or out of
+  order, copy 0.18 ms per frame on the Mac.
+- No Orin run.
+
+**Expected on the Orin:**
+- The main loop loses camera_read 21 ms, gains a 2-slot copy (~1–2 ms).
+- ~52 → ~32 ms per frame, so ~25–30 fps (camera max 30). This is an
+  estimate.
+
+**Next Test (Orin):**
+- `git fetch && git checkout camera-process`, restart the service.
+- Compare fps / timing with main.
+- Compare the distance at the same spot with main (±3 cm).
+- Restart the service (no "device busy").
+- Mega power cycle → WAIT_MEGA → back.
+- Unplug the camera → recovery.
+- Turret: no new swing.
+- Back out: `git checkout main` + restart.

@@ -5,8 +5,10 @@ import time
 import cv2
 import numpy as np
 
+from camera_process import create_process_camera
 from camera_source import RecoverableCameraError, create_camera
 from config import (
+    CAMERA_IN_SEPARATE_PROCESS,
     CAMERA_INDEX,
     CAMERA_RECOVERY_BACKOFF_SECONDS,
     CAMERA_RECOVERY_MAX_ATTEMPTS,
@@ -618,7 +620,9 @@ def run_vision_session(
                         camera_frame = camera.read()
                         _record_stage("camera_read", time.perf_counter() - _t0)
                         # RealSense only: wait for the frame / align depth
-                        # to color / numpy conversion (2026-11-01).
+                        # to color / numpy conversion (2026-11-01). With the
+                        # capture process: the main loop's wait + copy, and
+                        # the child's align etc. (off this loop).
                         for _name, _elapsed in getattr(camera, "last_read_timings", {}).items():
                             _record_stage(f"camera_{_name}", _elapsed)
 
@@ -843,16 +847,20 @@ def main():
     args = parse_args()
     # v3 (2026-10-27): deploy together with the matching Mega firmware.
     serial_tx = VisionSerial(port=args.serial_port, enabled=args.serial, protocol_version=3)
+    # Branch camera-process: RealSense captured in its own process.
+    camera_factory = create_process_camera if CAMERA_IN_SEPARATE_PROCESS else create_camera
 
     try:
         if not args.wait_for_mega:
-            run_vision_session(args, serial_tx, require_mega=False)
+            run_vision_session(args, serial_tx, require_mega=False,
+                               camera_factory=camera_factory)
             return
 
         while True:
             serial_tx.wait_for_mega()
             serial_tx.send_status("VISION_STARTING", force=True)
-            outcome = run_vision_session(args, serial_tx, require_mega=True)
+            outcome = run_vision_session(args, serial_tx, require_mega=True,
+                                         camera_factory=camera_factory)
             if outcome == "user_exit":
                 return
             serial_tx.send_status("VISION_STANDBY", force=True)

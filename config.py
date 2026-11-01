@@ -123,3 +123,8 @@ REALSENSE_SERIAL = None
 REALSENSE_TIMEOUT_MS = 5000
 REALSENSE_WARMUP_FRAMES = 15
 REALSENSE_ENABLE_EMITTER = True
+# Branch camera-process (2026-11-01): RealSense wait + align + depth
+# conversion in a separate process (camera_process.ProcessCamera), on
+# another CPU core, instead of ~20 ms of every frame in the vision loop.
+# False = the in-process camera, exactly as on main.
+CAMERA_IN_SEPARATE_PROCESS = True
