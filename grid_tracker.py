@@ -196,10 +196,12 @@ class GridTracker:
         # estimate here only risks rare hole-ID mismatches, not aim error.
         t0 = time.perf_counter()
         scale = GRID_TRACKER_MOTION_SCALE
-        small_frame = cv2.resize(
-            frame, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
-        )
-        gray = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
+        # Gray first (2026-11-01): resizing one channel instead of three.
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if scale != 1.0:
+            gray = cv2.resize(
+                gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA
+            )
         self.last_motion_timings["resize_gray"] = time.perf_counter() - t0
         previous = self.previous_gray
         self.previous_gray = gray

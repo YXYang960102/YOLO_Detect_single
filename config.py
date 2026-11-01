@@ -30,7 +30,12 @@ GRID_TRACKER_MAX_ERROR_RATIO = 0.65
 # hint (not detection/tracking itself) -- 0.75 chosen as a conservative
 # first step (2026-10-09) after measuring grid_tracker as the dominant,
 # highly variable per-frame cost (40-141ms) on real hardware.
-GRID_TRACKER_MOTION_SCALE = 0.75
+# 0.5 since 2026-11-01: grid_tracker was still the largest stage at 0.75
+# (25 ms of a 67 ms frame on the Orin: resize+gray 9, features 10, flow 5)
+# while the Orin ran 15 fps with one CPU core at 97% and the GPU mostly
+# idle. Half the width and height = 1/4 of the pixels (0.75 was 0.56).
+# The hint only disambiguates hole ids; tx / ty to the Mega don't use it.
+GRID_TRACKER_MOTION_SCALE = 0.5
 
 RED_SCORE_THRESHOLD = 0.05
 RED_TARGET_SWITCH_MARGIN = 0.03

@@ -1,3 +1,4 @@
+import time
 from dataclasses import dataclass
 from typing import Dict, Optional
 
@@ -200,9 +201,19 @@ class RealSenseCamera:
         )
 
     def read(self):
+        # Per-step times of this read, in seconds (2026-11-01): the vision
+        # loop prints them as camera_wait / camera_align / camera_convert
+        # next to its own stages, to see where the ~20 ms per frame outside
+        # the timed stages goes.
+        self.last_read_timings = {}
         try:
+            t0 = time.perf_counter()
             frames = self.pipeline.wait_for_frames(timeout_ms=self.timeout_ms)
+            t1 = time.perf_counter()
             aligned = self.align.process(frames)
+            t2 = time.perf_counter()
+            self.last_read_timings["wait"] = t1 - t0
+            self.last_read_timings["align"] = t2 - t1
             color_frame = aligned.get_color_frame()
             depth_frame = aligned.get_depth_frame()
             if not color_frame or not depth_frame:
@@ -220,6 +231,7 @@ class RealSenseCamera:
             # intrinsics used by YOLO are the color-camera coordinates.
             intr = color_frame.profile.as_video_stream_profile().get_intrinsics()
             intrinsics = self._convert_intrinsics(intr)
+            self.last_read_timings["convert"] = time.perf_counter() - t2
 
             return CameraFrame(
                 color=color,

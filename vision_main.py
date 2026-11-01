@@ -614,7 +614,13 @@ def run_vision_session(
                         pending_frame = None
                         pending_results = None
                     else:
+                        _t0 = time.perf_counter()
                         camera_frame = camera.read()
+                        _record_stage("camera_read", time.perf_counter() - _t0)
+                        # RealSense only: wait for the frame / align depth
+                        # to color / numpy conversion (2026-11-01).
+                        for _name, _elapsed in getattr(camera, "last_read_timings", {}).items():
+                            _record_stage(f"camera_{_name}", _elapsed)
 
                         if camera_frame is None:
                             continue

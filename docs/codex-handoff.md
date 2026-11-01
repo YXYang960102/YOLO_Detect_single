@@ -1920,3 +1920,50 @@ decides; the Mega has to be told.
 
 **Evidence:** 65/65 unittest. No Jetson run; the red-ring detection itself
 is unchanged.
+
+## 2026-11-01 — Claude Code: lighter optical-flow hint + camera read timing
+
+**User Request:** teammates saw the Orin's compute "quite low" and wanted
+it used more. Jeremy approved steps 1 and 2 of the plan.
+
+**Discussion Result:** the Orin is already at MAXN_SUPER with
+`jetson_clocks` (CPU 1728 MHz, GPU ~1015 MHz), drawing ~8.9 W.
+`sudo tegrastats` while vision runs (15 fps):
+- one CPU core at 97 %, the other five at 0–7 %;
+- GPU 0–23 % (YOLO 10.8 ms per 67 ms frame ≈ 16 %).
+
+So the bottleneck is the single Python thread, not the power mode. Per
+frame:
+- grid_tracker 25.5 ms (resize+gray 9.1, features 10.4, flow 5.2);
+- yolo 10.8 ms;
+- other post-processing ~9 ms;
+- ~20 ms untimed (camera wait / align).
+
+**Changed:**
+- `GRID_TRACKER_MOTION_SCALE` 0.75 → 0.5, i.e. 1/4 of the pixels instead
+  of 0.56.
+- `GridTracker._estimate_frame_motion` converts to gray before resizing
+  (one channel to resize instead of three).
+- The hint only disambiguates hole ids; tx / ty / distance to the Mega
+  are unchanged.
+
+**Added:**
+- `RealSenseCamera.read()` fills `last_read_timings` (wait / align /
+  convert, seconds).
+- `vision_main` records `camera_read` around `camera.read()` plus
+  `camera_wait` / `camera_align` / `camera_convert` in the `timing:` line.
+
+**Evidence:**
+- 65/65 unittest (Mac venv).
+- Ad-hoc check (scratchpad, not committed): a textured frame shifted by
+  (12, −8) and (−30, 5) px gives the same motion at 0.5 as at 0.75.
+  On the Mac, 5.8 → 2.8 ms per call.
+- No Orin run yet.
+
+**Next Test (Orin):** update, restart the service, read
+`journalctl -u yolo-vision.service -f`.
+- Expect grid_tracker ~10–13 ms and fps ~18–19.
+- Check the hole numbers stay stable while the robot turns (`--show` view
+  if needed).
+- Use the new camera_* times to decide step 3 (camera read + align on a
+  second thread).
