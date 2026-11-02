@@ -2035,3 +2035,23 @@ worse or breaks.
 - Unplug the camera → recovery.
 - Turret: no new swing.
 - Back out: `git checkout main` + restart.
+
+## 2026-11-01 — Claude Code: camera-process verified on the Orin, merged into main (7524bb36, pushed)
+
+**Evidence (Orin, Jeremy):**
+- 23–25.5 fps on the branch, up from 19.1.
+- camera_read 21.2 → 1.0 ms (wait 0.2 + copy 0.8). camera_align 20.3 ms now runs in the child.
+- `grid_match` (~13 ms) only runs when fewer than 12 holes are in view, so fps is scene-dependent.
+- Jeremy confirmed all four checks:
+  - distance at the same spot matches main (±3 cm);
+  - the service restarts cleanly;
+  - a Mega power cycle → WAIT_MEGA → reconnects;
+  - no new turret swing.
+- main was fast-forwarded to 7524bb36 and pushed.
+
+**Rollback:** `config.CAMERA_IN_SEPARATE_PROCESS = False` (the in-process camera), or `git checkout 9f9bb59a`.
+
+**Also measured (no code):**
+- `sudo tegrastats` (plain tegrastats shows GR3D 0 %): MAXN_SUPER, CPU 1728 MHz, GPU ~1015 MHz, ~8.9 W.
+- Before the branch, one core sat at 97 % and the GPU at ~16–20 %.
+- `align_thread_check.py` (scratchpad, not committed): with align in a background thread the main thread kept only 49 % of its speed, i.e. align holds the GIL. That is why this uses a process, not a thread.
