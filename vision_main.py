@@ -17,6 +17,7 @@ from config import (
     CAPTURE_DIR,
     CAPTURE_JPEG_QUALITY,
     CAPTURE_MAX_IMAGES,
+    CAPTURE_REMOTE_EVERY_SECONDS,
     CONFIDENCE,
     DEPTH_DISTANCE_MODE,
     DEPTH_HOLE_DETECT_DEVIATION_MM,
@@ -658,7 +659,10 @@ def run_vision_session(
 
                     frame = camera_frame.color
                     # Training images: the raw frame, before any overlay.
+                    # The Dashboard's P toggle arrives with the Mega's
+                    # heartbeat (MEGA_CAPTURE).
                     if frame_capture is not None:
+                        frame_capture.set_remote(getattr(serial_tx, "capture_requested", False))
                         frame_capture.maybe_save(frame)
                     height, width = frame.shape[:2]
                     frame_center_x = width // 2
@@ -875,13 +879,13 @@ def main():
     serial_tx = VisionSerial(port=args.serial_port, enabled=args.serial, protocol_version=3)
     # Branch camera-process: RealSense captured in its own process.
     camera_factory = create_process_camera if CAMERA_IN_SEPARATE_PROCESS else create_camera
-    # Training images (2026-11-14): one folder per program start; 'p' works
-    # whenever the window is shown, --capture-every also without it.
-    frame_capture = None
-    if args.capture_every > 0 or not args.no_display:
-        frame_capture = FrameCapture(args.capture_dir, every_seconds=args.capture_every,
-                                     max_images=args.capture_max,
-                                     jpeg_quality=CAPTURE_JPEG_QUALITY)
+    # Training images (2026-11-14): one folder per program start, created
+    # only once a frame is saved. On whenever --capture-every is given or
+    # the Dashboard's P turns it on; 'p' saves one when the window is shown.
+    frame_capture = FrameCapture(args.capture_dir, every_seconds=args.capture_every,
+                                 max_images=args.capture_max,
+                                 jpeg_quality=CAPTURE_JPEG_QUALITY,
+                                 remote_every=CAPTURE_REMOTE_EVERY_SECONDS)
 
     try:
         if not args.wait_for_mega:

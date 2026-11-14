@@ -29,6 +29,9 @@ class VisionSerial:
         self.baud = baud
         self.enabled = enabled
         self.selected_target_id = 0
+        # Photo capture asked for from the Dashboard (P, 2026-11-14):
+        # MEGA_CAPTURE,<version>,<0|1>, resent with every heartbeat.
+        self.capture_requested = False
         self.last_message = ""
         self.last_send_time = 0.0
         self.heartbeat_seconds = heartbeat_seconds
@@ -145,6 +148,11 @@ class VisionSerial:
                         and fields[2] in allowed):
                     self.selected_target_id = int(fields[2])
                 continue
+            if fields[0] == "MEGA_CAPTURE":
+                if (len(fields) == 3 and fields[1] == str(self.protocol_version)
+                        and fields[2] in ("0", "1")):
+                    self.capture_requested = fields[2] == "1"
+                continue
             if fields[0] not in ("MEGA_READY", "MEGA_HEARTBEAT"):
                 continue
             if fields[1] != str(self.protocol_version):
@@ -170,6 +178,7 @@ class VisionSerial:
 
     def forget_mega(self):
         self.last_mega_heartbeat = None
+        self.capture_requested = False
 
     def send_status(self, status, force=False):
         message = f"{str(status).strip().upper()},{self.protocol_version}"

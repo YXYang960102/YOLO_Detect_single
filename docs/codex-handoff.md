@@ -2090,3 +2090,22 @@ written. Not run on the Orin / RealSense yet; FPS cost not measured there.
 **Next Test:** on the Orin with `--capture-every 1.0`: fps line unchanged
 (23-25), JPEGs appear in `dataset_capture/<start>/`; motion blur while
 driving -> consider slower driving or a shorter exposure for the photos.
+
+## 2026-11-14 — Claude Code: capture toggled from the Dashboard (MEGA_CAPTURE)
+
+**User Request (Jeremy):** turn the photo capture on / off with a key on
+the Dashboard / pad instead of the start-up flag.
+
+**Changed:** `serial_tx.VisionSerial`: `MEGA_CAPTURE,<version>,<0|1>` (sent
+by the Mega on change and with every heartbeat) -> `capture_requested`;
+malformed or other-version lines ignored; `forget_mega()` clears it.
+`FrameCapture`: `set_remote(on)` (logs ON / OFF), `remote_every`; saves
+while `--capture-every` > 0 or the remote toggle is on, every
+`--capture-every` seconds if given, else `CAPTURE_REMOTE_EVERY_SECONDS`
+(config, 1.0). `vision_main`: always creates the FrameCapture (its folder
+appears only when a frame is saved) and feeds it `serial_tx.capture_requested`
+each frame. Needs the Mega / ground / Dashboard from TEL_Robot_2026's
+2026-11-14 entry (P key, CH9 level 3).
+
+**Evidence:** unittest 74 OK; scratch run: MEGA_CAPTURE parsed, bad lines
+ignored, 2 frames in 1.5 s on, none after OFF, cleared on forget_mega.

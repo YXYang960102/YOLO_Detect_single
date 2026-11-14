@@ -7,8 +7,11 @@ JPEG into one folder per program start:
     dataset_capture/20261114_153012/000001_153013.jpg
 
 --capture-every N saves one frame every N seconds (also with --no-display,
-so the robot collects while it drives in practice); 'p' in the display
-window saves one at once. The files are written by a background thread,
+so the robot collects while it drives in practice). The Dashboard's P key
+/ the pad's View button turns it on and off from the driver station
+(Mega -> MEGA_CAPTURE, set_remote(); 2026-11-14): every remote_every
+seconds, or every N when --capture-every is also given. 'p' in the
+display window saves one at once. The files are written by a background thread,
 so the vision loop only pays for a frame copy; when the writer falls
 behind, that frame is skipped instead of waiting. Saving stops once the
 whole dataset_capture folder holds max_images JPEGs (the Orin's disk).
@@ -25,9 +28,11 @@ import cv2
 
 class FrameCapture:
     def __init__(self, root, every_seconds=0.0, max_images=3000, jpeg_quality=95,
-                 clock=time.monotonic):
+                 remote_every=1.0, clock=time.monotonic):
         self.root = root
         self.every_seconds = max(0.0, float(every_seconds or 0.0))
+        self.remote_every = max(0.1, float(remote_every))
+        self.remote_on = False
         self.max_images = int(max_images)
         self.jpeg_quality = int(jpeg_quality)
         self.clock = clock
@@ -45,7 +50,23 @@ class FrameCapture:
 
     @property
     def auto_enabled(self):
-        return self.every_seconds > 0
+        return self.every_seconds > 0 or self.remote_on
+
+    @property
+    def interval(self):
+        return self.every_seconds if self.every_seconds > 0 else self.remote_every
+
+    def set_remote(self, on):
+        """The Dashboard's P toggle, as the Mega last reported it."""
+        on = bool(on)
+        if on == self.remote_on:
+            return
+        self.remote_on = on
+        if on:
+            print(f"[capture] ON from the Dashboard: every {self.interval:.1f} s -> "
+                  f"{self.session_dir} ({self.total}/{self.max_images})")
+        else:
+            print(f"[capture] OFF from the Dashboard ({self.saved} saved this run)")
 
     def _count_existing(self):
         count = 0
@@ -59,7 +80,7 @@ class FrameCapture:
         if not self.auto_enabled or frame is None:
             return
         now = self.clock()
-        if self._last_auto is not None and now - self._last_auto < self.every_seconds:
+        if self._last_auto is not None and now - self._last_auto < self.interval:
             return
         self._last_auto = now
         self._submit(frame)

@@ -136,3 +136,6 @@ CAMERA_IN_SEPARATE_PROCESS = True
 CAPTURE_DIR = "dataset_capture"
 CAPTURE_MAX_IMAGES = 3000
 CAPTURE_JPEG_QUALITY = 95
+# The Dashboard's P toggle (2026-11-14): one frame every this many seconds
+# (--capture-every, when given, sets the interval instead).
+CAPTURE_REMOTE_EVERY_SECONDS = 1.0
