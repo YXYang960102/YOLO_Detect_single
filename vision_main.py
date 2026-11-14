@@ -14,6 +14,9 @@ from config import (
     CAMERA_RECOVERY_MAX_ATTEMPTS,
     CAMERA_RECOVERY_RESET_SECONDS,
     CAMERA_SOURCE,
+    CAPTURE_DIR,
+    CAPTURE_JPEG_QUALITY,
+    CAPTURE_MAX_IMAGES,
     CONFIDENCE,
     DEPTH_DISTANCE_MODE,
     DEPTH_HOLE_DETECT_DEVIATION_MM,
@@ -50,6 +53,7 @@ from config import (
 )
 from depth_distance import DepthEstimator
 from depth_hole_detector import DepthHoleDetector
+from frame_capture import FrameCapture
 from grid_tracker import GridTracker
 from hole_grid import assign_ids, grid_memory_count, reset_grid_memory
 from red_target import TargetStabilizer, select_red_target
@@ -405,6 +409,19 @@ def parse_args():
     )
     parser.add_argument("--no-display", action="store_true")
     parser.add_argument(
+        "--capture-every",
+        type=float,
+        default=0.0,
+        metavar="SECONDS",
+        help=(
+            "save the raw camera frame every SECONDS into --capture-dir/<start "
+            "time>/ for training (0 = off; 'p' in the window saves one anyway)"
+        ),
+    )
+    parser.add_argument("--capture-dir", default=CAPTURE_DIR)
+    parser.add_argument("--capture-max", type=int, default=CAPTURE_MAX_IMAGES,
+                        help="stop saving once --capture-dir holds this many JPEGs")
+    parser.add_argument(
         "--show-depth-ring",
         action="store_true",
         help="test only: draw the target's depth sampling ring (key 'd' toggles)",
@@ -470,6 +487,7 @@ def run_vision_session(
     recovery_backoff_seconds=CAMERA_RECOVERY_BACKOFF_SECONDS,
     clock=time.monotonic,
     sleeper=time.sleep,
+    frame_capture=None,
 ):
     """Runs vision with camera-only recovery while retaining the YOLO model."""
     model = None
@@ -639,6 +657,9 @@ def run_vision_session(
                         _record_stage("yolo", time.perf_counter() - _t0)
 
                     frame = camera_frame.color
+                    # Training images: the raw frame, before any overlay.
+                    if frame_capture is not None:
+                        frame_capture.maybe_save(frame)
                     height, width = frame.shape[:2]
                     frame_center_x = width // 2
                     frame_center_y = height // 2
@@ -757,6 +778,9 @@ def run_vision_session(
                                    ring=ring, lit_id=lit_id)
 
                     if not args.no_display:
+                        # draw_debug draws on the frame itself: keep a clean
+                        # copy for 'p' (display mode only, ~1 ms).
+                        raw_frame = frame.copy() if frame_capture is not None else None
                         draw_debug(
                             frame,
                             holes,
@@ -791,6 +815,8 @@ def run_vision_session(
                         if key == ord("o"):
                             show_overlay = not show_overlay
                             print(f"[display] overlay {'ON' if show_overlay else 'OFF'}")
+                        if key == ord("p") and frame_capture is not None:
+                            frame_capture.save_now(raw_frame)  # without the overlay
                         if key == ord("d"):
                             show_depth_ring = not show_depth_ring
                             print(f"[display] depth ring {'ON' if show_depth_ring else 'OFF'}")
@@ -849,18 +875,27 @@ def main():
     serial_tx = VisionSerial(port=args.serial_port, enabled=args.serial, protocol_version=3)
     # Branch camera-process: RealSense captured in its own process.
     camera_factory = create_process_camera if CAMERA_IN_SEPARATE_PROCESS else create_camera
+    # Training images (2026-11-14): one folder per program start; 'p' works
+    # whenever the window is shown, --capture-every also without it.
+    frame_capture = None
+    if args.capture_every > 0 or not args.no_display:
+        frame_capture = FrameCapture(args.capture_dir, every_seconds=args.capture_every,
+                                     max_images=args.capture_max,
+                                     jpeg_quality=CAPTURE_JPEG_QUALITY)
 
     try:
         if not args.wait_for_mega:
             run_vision_session(args, serial_tx, require_mega=False,
-                               camera_factory=camera_factory)
+                               camera_factory=camera_factory,
+                               frame_capture=frame_capture)
             return
 
         while True:
             serial_tx.wait_for_mega()
             serial_tx.send_status("VISION_STARTING", force=True)
             outcome = run_vision_session(args, serial_tx, require_mega=True,
-                                         camera_factory=camera_factory)
+                                         camera_factory=camera_factory,
+                                         frame_capture=frame_capture)
             if outcome == "user_exit":
                 return
             serial_tx.send_status("VISION_STANDBY", force=True)
@@ -870,6 +905,8 @@ def main():
             serial_tx.send_status("VISION_ERROR", force=True)
         raise
     finally:
+        if frame_capture is not None:
+            frame_capture.close()
         serial_tx.close()
 
 

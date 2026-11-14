@@ -128,3 +128,11 @@ REALSENSE_ENABLE_EMITTER = True
 # another CPU core, instead of ~20 ms of every frame in the vision loop.
 # False = the in-process camera, exactly as on main.
 CAMERA_IN_SEPARATE_PROCESS = True
+
+# Training-image capture (2026-11-14, frame_capture.py): raw color frames
+# into CAPTURE_DIR/<start time>/ with --capture-every N seconds or 'p'.
+# Off unless asked for. CAPTURE_MAX_IMAGES caps the whole folder (1280x720
+# JPEG ~0.2-0.3 MB each: 3000 ~ 0.6-0.9 GB of the Orin's disk).
+CAPTURE_DIR = "dataset_capture"
+CAPTURE_MAX_IMAGES = 3000
+CAPTURE_JPEG_QUALITY = 95

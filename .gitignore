@@ -23,3 +23,7 @@ samples/videos/*
 
 *.cache
 *.log
+
+# Training-image capture (frame_capture.py): images stay on the Orin / are copied off by hand
+dataset_capture/*
+!dataset_capture/.gitkeep

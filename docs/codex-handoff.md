@@ -2055,3 +2055,38 @@ worse or breaks.
 - `sudo tegrastats` (plain tegrastats shows GR3D 0 %): MAXN_SUPER, CPU 1728 MHz, GPU ~1015 MHz, ~8.9 W.
 - Before the branch, one core sat at 97 % and the GPU at ~16–20 %.
 - `align_thread_check.py` (scratchpad, not committed): with align in a background thread the main thread kept only 49 % of its speed, i.e. align holds the GIL. That is why this uses a process, not a thread.
+
+## 2026-11-14 — Claude Code: training-image capture (dataset_capture/)
+
+**User Request (Jeremy):** this year's field graphics differ a lot from
+last year's (the holes did not change); collect photos of the new field
+from the robot's camera, automatically while the robot drives in practice,
+into one folder for training.
+
+**Discussion Result:** the background does matter to YOLO (missed holes
+on a new contrast, false boxes on new printed shapes); fine-tune with new
+field images, background-only frames included, and a separate validation
+split (`data.yaml` validates on the training set today).
+
+**Added:** `frame_capture.py` (`FrameCapture`): the raw color frame, taken
+before any overlay, as JPEG (quality 95) into
+`dataset_capture/<YYYYmmdd_HHMMSS at start>/<NNNNNN>_<HHMMSS>.jpg`; a
+background writer thread (queue of 2: a frame is skipped, never waited
+for); stops once `dataset_capture/` holds `CAPTURE_MAX_IMAGES` (3000) JPEGs.
+`config.py`: `CAPTURE_DIR`, `CAPTURE_MAX_IMAGES`, `CAPTURE_JPEG_QUALITY`.
+
+**Changed:** `vision_main.py`: `--capture-every SECONDS` (0 = off, the
+default: nothing changes), `--capture-dir`, `--capture-max`; key `p` saves
+one frame when the window is shown (display mode copies the clean frame
+before `draw_debug`, ~1 ms). `run_vision_session(frame_capture=...)`, one
+`FrameCapture` per program start, closed in `main()`'s finally (queued
+frames written on SIGINT / service stop). `.gitignore`: the images stay
+out of git, `dataset_capture/.gitkeep` keeps the folder.
+
+**Evidence:** existing unittest suite, 74 tests OK (Mac venv); a scratch
+run of `FrameCapture` on dummy frames: one per second, cap honored, files
+written. Not run on the Orin / RealSense yet; FPS cost not measured there.
+
+**Next Test:** on the Orin with `--capture-every 1.0`: fps line unchanged
+(23-25), JPEGs appear in `dataset_capture/<start>/`; motion blur while
+driving -> consider slower driving or a shorter exposure for the photos.
