@@ -283,9 +283,15 @@ def draw_debug(
                 2,
             )
         cv2.circle(frame, (hole["cx"], hole["cy"]), 5, (0, 255, 0), -1)
+        # C = the YOLO confidence (2026-11-15, Jeremy: see it on the live
+        # view); "--" for a hole that is not this frame's detection (grid
+        # memory / prediction). Below GENERAL_TARGET_CONFIDENCE it is never
+        # picked as the target.
+        conf = hole.get("conf")
+        conf_text = f"{conf:.2f}" if isinstance(conf, (int, float)) and conf > 0 else "--"
         cv2.putText(
             frame,
-            f"ID:{hole_id} R:{hole['red_score']:.3f}",
+            f"ID:{hole_id} C:{conf_text} R:{hole['red_score']:.3f}",
             (hole["cx"] + 8, hole["cy"]),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,

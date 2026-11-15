@@ -2109,3 +2109,53 @@ each frame. Needs the Mega / ground / Dashboard from TEL_Robot_2026's
 
 **Evidence:** unittest 74 OK; scratch run: MEGA_CAPTURE parsed, bad lines
 ignored, 2 frames in 1.5 s on, none after OFF, cleared on forget_mega.
+
+## 2026-11-14 — tools/dataset: capture -> pre-labels -> fine-tune -> old/new check
+
+**User Request (Jeremy):** the field graphics differ from the real event's;
+a quick, efficient retrain flow with the new photo capture, as two tools.
+
+**Added:**
+- `tools/dataset/prepare_capture.py`: dataset_capture/ -> dHash dedupe
+  (<= 6 of 64 bits = duplicate) -> weights/best.pt pre-labels at conf 0.25
+  -> dataset_prepared/<time>/upload (images + YOLO labels + data.yaml, for
+  Roboflow) and no_holes/ (to review: background or missed).
+- `tools/dataset/train_merge.py`: old Roboflow set (all train) + new
+  export(s) + background photos (empty labels); 20 % of new / background =
+  check set; fine-tune from weights/best.pt, 40 epochs, hsv_h 0.03 /
+  hsv_s 0.8 / hsv_v 0.5; then both models on the check set at
+  config.CONFIDENCE, IoU >= 0.5: hit / missed / false / false on background.
+  `--check-only` re-runs only the comparison. Never overwrites weights/.
+- `tools/dataset/README.md`: the whole flow incl. the Orin swap (the
+  service runs weights/best.engine: export on the Orin; backup
+  best_1114.*; rollback).
+- .gitignore: dataset_prepared/, datasets_merged/.
+
+**Note:** the old data.yaml has val = train images, so its scores were on
+seen photos; the new check set fixes that for the comparison.
+
+**Evidence:** both run end to end on the Mac (venv, ultralytics 8.4.60,
+MPS) with 30 copied training photos + 4 synthetic backgrounds: 34 -> 18
+after dedupe, 14 boxed / 4 no_holes; 1-epoch fine-tune (~43 s for 314
+photos) and the comparison table printed; --check-only works. Not run on
+real field photos or the Orin yet.
+
+**Next Test:** real capture from practice -> prepare -> Roboflow -> train
+40 epochs; swap on the Orin only if missed and false are not worse.
+
+## 2026-11-15 — Live view shows each hole's YOLO confidence
+
+**User Request (Jeremy):** see the live camera view with the confidence.
+
+**Changed:** `vision_main.draw_debug`: the per-hole label is now
+`ID:<id> C:<conf> R:<red score>`; `C:--` for a hole without this frame's
+detection confidence (grid memory / prediction). Display only (not with
+--no-display); nothing sent to the Mega changes. Thresholds for reading
+it: config.CONFIDENCE 0.35 (box dropped below), GENERAL_TARGET_CONFIDENCE
+0.50 (never picked as the target below).
+
+**Evidence:** unittest discover 74 tests OK; draw_debug rendered on a
+blank frame (label "ID:5 C:0.82", "ID:8 C:--"). Not run on the Orin.
+
+**Next Test:** on the Orin with a monitor: run without --no-display, check
+C on the holes of the new field.

@@ -27,3 +27,7 @@ samples/videos/*
 # Training-image capture (frame_capture.py): images stay on the Orin / are copied off by hand
 dataset_capture/*
 !dataset_capture/.gitkeep
+
+# Retrain tools (tools/dataset/): prepared / merged copies of the photos
+dataset_prepared/
+datasets_merged/
