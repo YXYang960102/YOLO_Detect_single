@@ -32,6 +32,10 @@ class VisionSerial:
         # Photo capture asked for from the Dashboard (P, 2026-11-14):
         # MEGA_CAPTURE,<version>,<0|1>, resent with every heartbeat.
         self.capture_requested = False
+        # A Mega that reads frame field 10, the nearest bottom-row hole
+        # (MEGA_NEAR,<version>,1, 2026-11-15). Until then 9 fields, so an
+        # older Mega never gets a frame it would reject.
+        self.near_requested = False
         self.last_message = ""
         self.last_send_time = 0.0
         self.heartbeat_seconds = heartbeat_seconds
@@ -148,6 +152,11 @@ class VisionSerial:
                         and fields[2] in allowed):
                     self.selected_target_id = int(fields[2])
                 continue
+            if fields[0] == "MEGA_NEAR":
+                if (len(fields) == 3 and fields[1] == str(self.protocol_version)
+                        and fields[2] == "1"):
+                    self.near_requested = True
+                continue
             if fields[0] == "MEGA_CAPTURE":
                 if (len(fields) == 3 and fields[1] == str(self.protocol_version)
                         and fields[2] in ("0", "1")):
@@ -179,6 +188,7 @@ class VisionSerial:
     def forget_mega(self):
         self.last_mega_heartbeat = None
         self.capture_requested = False
+        self.near_requested = False
 
     def send_status(self, status, force=False):
         message = f"{str(status).strip().upper()},{self.protocol_version}"
@@ -193,7 +203,8 @@ class VisionSerial:
             self.last_status_send_time = now
         return sent
 
-    def send(self, tx, ty, distance, target_id, valid, force=False, seen_mask=0, ring=None, lit_id=0):
+    def send(self, tx, ty, distance, target_id, valid, force=False, seen_mask=0, ring=None, lit_id=0,
+             near_bottom=0):
         # v3 (2026-10-27): a sixth field, the reliably detected hole ids as
         # a bitmask (bit id - 1), and valid = 2 for a predicted (aim-only)
         # position of the selected hole. 2026-10-28: then ring_pct,
@@ -207,6 +218,10 @@ class VisionSerial:
         if self.protocol_version >= 3:
             ring_pct, ring_sectors = ring if ring is not None else (-1, 0)
             message += f",{int(seen_mask)},{int(ring_pct)},{int(ring_sectors)},{int(lit_id)}"
+            # 2026-11-15: near_bottom (10-12, 0 = none), for a Mega that
+            # asked (MEGA_NEAR) -- its second half starts there.
+            if self.near_requested:
+                message += f",{int(near_bottom)}"
         now = self.clock()
         changed = message != self.last_message
         heartbeat_due = now - self.last_send_time >= self.heartbeat_seconds

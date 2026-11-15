@@ -2214,3 +2214,14 @@ Drawn magenta, label "DEPTH ID:n". Synthetic check: YOLO 4-9 + depth
 disks at 4-12 -> 10 / 11 / 12 added; select 11 -> seen, 5190 mm valid 1;
 seen mask 4-12; no depth disks -> none; all 12 boxed -> detector not run.
 unittest 74 OK.
+
+## 2026-11-15 — Frame field 10: nearest bottom-row hole (for the Mega's second half)
+
+serial_tx: `near_requested` set by `MEGA_NEAR,<version>,1` (reset by
+forget_mega); `send(..., near_bottom=0)` appends it as field 10 only then.
+vision_main: `nearest_bottom_hole` -- the reliable hole with id 10-12 (YOLO
+or depth_confirmed, not raw depth) with the shortest ring distance
+(`depth_estimator.measure(..., target_id=None)`, so the target's smoothing
+is untouched), computed only when the Mega asked; passed via **extra so
+older fakes / callers keep working. unittest 74 OK; checked: 9 fields
+before MEGA_NEAR, 10 after; 10 at 5.62 m vs 11 at 5.31 m -> 11.

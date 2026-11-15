@@ -216,6 +216,35 @@ def confirm_missing_with_depth(target_hole, holes, depth_mm, intrinsics, detecto
                 target_type=target_hole.get("target_type", TARGET_NONE))
 
 
+BOTTOM_ROW_IDS = (10, 11, 12)  # the Orin's grid ids of the bottom row (Dashboard 1 / 4 / 7)
+
+
+def nearest_bottom_hole(holes, target_manager, depth_mm, intrinsics, depth_estimator,
+                        distance_mode, frame_width, frame_height):
+    """The bottom-row hole (id 10-12) seen this frame with the shortest
+    depth-ring distance, or 0 (2026-11-15: the Mega's second half starts
+    there). Same ring measurement as the target's, but without its per-id
+    smoothing state. Example: 10 at 5.62 m, 11 at 5.31 m, 12 not seen -> 11."""
+    if depth_mm is None or intrinsics is None:
+        return 0
+    best_id, best_mm = 0, None
+    for hole in holes:
+        if hole.get("id") not in BOTTOM_ROW_IDS or hole.get("box") is None:
+            continue
+        if hole.get("detector") == "depth":
+            continue
+        if not target_manager._is_reliable(hole, frame_width, frame_height):
+            continue
+        measurement = depth_estimator.measure(depth_mm, hole["box"], (hole["cx"], hole["cy"]),
+                                              intrinsics, target_id=None)
+        if measurement is None:
+            continue
+        mm = measurement.range_mm if distance_mode == "range" else measurement.z_mm
+        if best_mm is None or mm < best_mm:
+            best_id, best_mm = hole["id"], mm
+    return best_id
+
+
 def build_observation_holes(candidates):
     """Assigns display-only IDs to depth-only candidates for the debug overlay.
 
@@ -934,8 +963,17 @@ def run_vision_session(
                             )
                             _record_stage("depth_ring", time.perf_counter() - _t0)
 
+                    # Field 10 only for a Mega that asked (MEGA_NEAR, 2026-11-15).
+                    extra = {}
+                    if getattr(serial_tx, "near_requested", False):
+                        _t0 = time.perf_counter()
+                        extra["near_bottom"] = nearest_bottom_hole(
+                            holes, target_manager, camera_frame.depth_mm,
+                            camera_frame.intrinsics, depth_estimator, args.distance_mode,
+                            width, height) if holes else 0
+                        _record_stage("near_bottom", time.perf_counter() - _t0)
                     serial_tx.send(tx, ty, distance, target_id, valid, seen_mask=seen_mask,
-                                   ring=ring, lit_id=lit_id)
+                                   ring=ring, lit_id=lit_id, **extra)
 
                     if not args.no_display:
                         # draw_debug draws on the frame itself: keep a clean
