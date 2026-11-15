@@ -2159,3 +2159,58 @@ blank frame (label "ID:5 C:0.82", "ID:8 C:--"). Not run on the Orin.
 
 **Next Test:** on the Orin with a monitor: run without --no-display, check
 C on the holes of the new field.
+
+## 2026-11-15 — Gray sub-threshold boxes in the live view; depth confirms a missed selected hole
+
+**User Request (Jeremy):** the bottom row was in the frame but not boxed
+(9 of 12 detected). Add the gray-box diagnostic, then: other holes seen,
+one hole not -> use the depth.
+
+**Changed:**
+- config `DEBUG_LOW_CONFIDENCE` 0.15. With the window open YOLO runs at
+  min(CONFIDENCE, 0.15); `build_holes` still keeps only >= CONFIDENCE
+  (everything downstream unchanged); `build_low_holes` collects 0.15..0.35
+  and `draw_debug(low_holes=...)` draws them gray with C. --no-display (the
+  match service) asks YOLO for CONFIDENCE exactly as before.
+- config `DEPTH_CONFIRM_MISSING` True, `..._MAX_OFFSET_RATIO` 0.5,
+  `..._MIN/MAX_SIZE_RATIO` 0.6 / 1.6. `confirm_missing_with_depth`: only
+  for the SELECTED hole that target_manager returned as predicted (YOLO
+  missed it, the grid of holes in view places it): DepthHoleDetector
+  candidates within 0.5 x the row's median YOLO width of the predicted
+  spot, width 0.6..1.6 x that -> target with detector "depth_confirmed",
+  the candidate's center / box -> resolve_distance_and_validity measures
+  the ring as for a YOLO hole -> valid 1 (the Mega may fire). No match:
+  still the aim-only prediction (valid 2). Depth with no YOLO grid still
+  never counts (2026-08-19 review). Drawn magenta "DEPTH ID:n". Costs the
+  depth detector (~19 ms on the Orin) only on frames where the selected
+  hole is predicted.
+
+**Evidence:** unittest 74 OK. Synthetic depth frame (board 5000 mm, holes
+as no-return disks, fx 640): hole at the predicted spot -> confirmed at
+(405, 558); no hole, a hole 70 px away, a 220 px wide dropout -> None;
+resolve on the confirmed target -> 5546 mm range, valid 1. Overlay
+rendered (gray C:0.27, magenta DEPTH ID:10). Not on the Orin / field.
+
+**Risk:** a depth dropout of hole size exactly where the grid predicts a
+hole would be taken as that hole -- the grid fit and the size window are
+the guard. Watch the magenta box on the field; set
+DEPTH_CONFIRM_MISSING False to go back to aim-only predictions.
+
+**Next Test:** field, select a bottom-row hole (Dashboard 1 / 4 / 7) in a
+view where YOLO misses it: magenta DEPTH box on the right hole, distance
+close to its neighbors'; cover the hole -> no confirmation.
+
+**Follow-up (same day, Jeremy: every depth-found hole valid, not only the
+selected one):** `fill_missing_with_depth` runs after assign_ids /
+grid_tracker (grid memory untouched): each id 1-12 missing this frame with
+a grid prediction inside the frame is matched against one detector pass
+(`_match_depth_candidate`, same offset / size rules, each candidate used
+once) and appended to `holes` as "depth_confirmed" -> red target, target
+choice (AI pick too), seen mask, lock, ring distance and shot treat it as a
+YOLO hole (its conf 0.55-0.95 passes GENERAL_TARGET_CONFIDENCE). The
+per-selected-target confirmation call is gone (`confirm_missing_with_depth`
+kept as a helper). Detector runs only when such a missing hole exists.
+Drawn magenta, label "DEPTH ID:n". Synthetic check: YOLO 4-9 + depth
+disks at 4-12 -> 10 / 11 / 12 added; select 11 -> seen, 5190 mm valid 1;
+seen mask 4-12; no depth disks -> none; all 12 boxed -> detector not run.
+unittest 74 OK.

@@ -19,6 +19,11 @@ from config import (
     CAPTURE_MAX_IMAGES,
     CAPTURE_REMOTE_EVERY_SECONDS,
     CONFIDENCE,
+    DEBUG_LOW_CONFIDENCE,
+    DEPTH_CONFIRM_MAX_OFFSET_RATIO,
+    DEPTH_CONFIRM_MAX_SIZE_RATIO,
+    DEPTH_CONFIRM_MIN_SIZE_RATIO,
+    DEPTH_CONFIRM_MISSING,
     DEPTH_DISTANCE_MODE,
     DEPTH_HOLE_DETECT_DEVIATION_MM,
     DEPTH_HOLE_DETECT_DIAMETER_TOLERANCE,
@@ -56,7 +61,8 @@ from depth_distance import DepthEstimator
 from depth_hole_detector import DepthHoleDetector
 from frame_capture import FrameCapture
 from grid_tracker import GridTracker
-from hole_grid import assign_ids, grid_memory_count, reset_grid_memory
+from hole_grid import (assign_ids, grid_memory_count, hole_grid_position, predict_hole_position,
+                       reset_grid_memory)
 from red_target import TargetStabilizer, select_red_target
 from serial_tx import VisionSerial
 from target_manager import TARGET_NONE, TargetManager
@@ -91,6 +97,123 @@ def build_holes(results):
             })
 
     return holes
+
+
+def build_low_holes(results):
+    """Live view only (2026-11-15): YOLO boxes with DEBUG_LOW_CONFIDENCE <=
+    conf < CONFIDENCE, drawn gray -- why a hole wasn't taken."""
+    low = []
+    for result in results:
+        for box in result.boxes:
+            conf = float(box.conf[0])
+            if conf < DEBUG_LOW_CONFIDENCE or conf >= CONFIDENCE:
+                continue
+            x1, y1, x2, y2 = (int(v) for v in box.xyxy[0])
+            low.append({"box": (x1, y1, x2, y2), "conf": conf})
+    return low
+
+
+def _match_depth_candidate(hole_id, px, py, holes, candidates, used=()):
+    """The depth candidate that is grid hole `hole_id`, predicted at (px, py)
+    from the YOLO holes in view, or None. Near that spot (within
+    DEPTH_CONFIRM_MAX_OFFSET_RATIO x the row's median YOLO width) and of
+    that size (DEPTH_CONFIRM_MIN/MAX_SIZE_RATIO); the closest one wins."""
+    row = hole_grid_position(hole_id)[1]
+    widths_row, widths_all = [], []
+    for hole in holes:
+        box = hole.get("box")
+        if (box is None or hole.get("detector") in ("depth", "depth_confirmed")
+                or hole.get("id") not in range(1, 13)):
+            continue
+        w = float(box[2] - box[0])
+        widths_all.append(w)
+        if hole_grid_position(hole["id"])[1] == row:
+            widths_row.append(w)
+    widths = widths_row or widths_all
+    if not widths:
+        return None
+    expected = float(np.median(widths))
+    best = None
+    for index, cand in enumerate(candidates):
+        if index in used:
+            continue
+        x1, y1, x2, y2 = cand["box"]
+        w = float(x2 - x1)
+        if not DEPTH_CONFIRM_MIN_SIZE_RATIO * expected <= w <= DEPTH_CONFIRM_MAX_SIZE_RATIO * expected:
+            continue
+        offset = float(np.hypot(cand["cx"] - px, cand["cy"] - py))
+        if offset > DEPTH_CONFIRM_MAX_OFFSET_RATIO * expected:
+            continue
+        if best is None or offset < best[0]:
+            best = (offset, index)
+    return None if best is None else best[1]
+
+
+def _depth_hole(hole_id, cand):
+    box = tuple(int(v) for v in cand["box"])
+    return {
+        "id": hole_id,
+        "cx": int(cand["cx"]),
+        "cy": int(cand["cy"]),
+        "box": box,
+        "conf": float(cand.get("conf", 0.0)),
+        "red_score": 0.0,
+        "ring_box": box,
+        "detector": "depth_confirmed",
+    }
+
+
+def fill_missing_with_depth(holes, depth_mm, intrinsics, detector, frame_width, frame_height):
+    """Every grid hole (1-12) YOLO missed this frame that the YOLO holes in
+    view place inside the frame (predict_hole_position) and the depth finds
+    right there: a hole of its own, detector "depth_confirmed" -- valid like
+    a YOLO hole from here on (target choice, seen mask, lock, distance from
+    the ring, shot). 2026-11-15, Jeremy: the bottom row in view but not
+    boxed. Runs after assign_ids / grid_tracker, so it never writes the grid
+    memory. The depth detector (~19 ms on the Orin) runs only when such a
+    missing hole exists.
+
+    Example: 4-12 boxed except 10-12; the grid places 10 at (830, 805), the
+    bottom row's neighbours are missing too, so the size comes from all
+    boxes (85 px) -> a depth blob 51..136 px wide within 42 px of it = 10."""
+    if depth_mm is None or intrinsics is None:
+        return []
+    present = {h.get("id") for h in holes}
+    missing = []
+    for hole_id in range(1, 13):
+        if hole_id in present:
+            continue
+        position = predict_hole_position(holes, hole_id, frame_width, frame_height)
+        if position is None:
+            continue
+        px, py = position
+        if 0 <= px < frame_width and 0 <= py < frame_height:
+            missing.append((hole_id, px, py))
+    if not missing:
+        return []
+    candidates = detector.detect(depth_mm, intrinsics)
+    added, used = [], set()
+    for hole_id, px, py in missing:
+        index = _match_depth_candidate(hole_id, px, py, holes, candidates, used)
+        if index is None:
+            continue
+        used.add(index)
+        added.append(_depth_hole(hole_id, candidates[index]))
+    return added
+
+
+def confirm_missing_with_depth(target_hole, holes, depth_mm, intrinsics, detector):
+    """One predicted (selected, missed) hole: the depth candidate at its
+    predicted spot as a "depth_confirmed" target, or None."""
+    if target_hole is None or not target_hole.get("predicted") or depth_mm is None:
+        return None
+    candidates = detector.detect(depth_mm, intrinsics)
+    index = _match_depth_candidate(target_hole["id"], target_hole["cx"], target_hole["cy"],
+                                   holes, candidates)
+    if index is None:
+        return None
+    return dict(_depth_hole(target_hole["id"], candidates[index]),
+                target_type=target_hole.get("target_type", TARGET_NONE))
 
 
 def build_observation_holes(candidates):
@@ -232,6 +355,7 @@ def draw_debug(
     depth_mm=None,
     depth_estimator=None,
     show_depth_ring=False,
+    low_holes=None,
 ):
     height, width = frame.shape[:2]
     frame_center_x = width // 2
@@ -258,6 +382,13 @@ def draw_debug(
     cv2.line(frame, (frame_center_x, 0), (frame_center_x, height), (255, 255, 0), 1)
     cv2.line(frame, (0, frame_center_y), (width, frame_center_y), (255, 255, 0), 1)
 
+    # Below CONFIDENCE (2026-11-15): gray, with their C; never used.
+    for low in low_holes or []:
+        x1, y1, x2, y2 = low["box"]
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (150, 150, 150), 1)
+        cv2.putText(frame, f"C:{low['conf']:.2f}", (x1, max(12, y1 - 4)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (170, 170, 170), 1)
+
     for hole in holes:
         hole_id = hole["id"]
         x1, y1, x2, y2 = hole["box"]
@@ -271,7 +402,11 @@ def draw_debug(
         else:
             color = (0, 255, 0)
 
-        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+        # Found by the depth, not YOLO (2026-11-15): magenta, "D" label.
+        from_depth = hole.get("detector") == "depth_confirmed"
+        if from_depth and not is_target:
+            color = (255, 0, 255)
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3 if from_depth else 2)
 
         if hole_id in RED_TARGET_IDS and hole["red_score"] >= RED_SCORE_THRESHOLD:
             ring_x1, ring_y1, ring_x2, ring_y2 = hole["ring_box"]
@@ -291,7 +426,7 @@ def draw_debug(
         conf_text = f"{conf:.2f}" if isinstance(conf, (int, float)) and conf > 0 else "--"
         cv2.putText(
             frame,
-            f"ID:{hole_id} C:{conf_text} R:{hole['red_score']:.3f}",
+            f"{'DEPTH ' if from_depth else ''}ID:{hole_id} C:{conf_text} R:{hole['red_score']:.3f}",
             (hole["cx"] + 8, hole["cy"]),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
@@ -497,6 +632,11 @@ def run_vision_session(
     frame_capture=None,
 ):
     """Runs vision with camera-only recovery while retaining the YOLO model."""
+    # The window shows boxes down to DEBUG_LOW_CONFIDENCE in gray; the match
+    # (--no-display) asks YOLO for CONFIDENCE only, exactly as before. Every
+    # use of the detections filters at CONFIDENCE either way (build_holes).
+    no_display = getattr(args, "no_display", True)
+    predict_conf = CONFIDENCE if no_display else min(CONFIDENCE, DEBUG_LOW_CONFIDENCE)
     model = None
     startup_started = clock()
     initial_start = True
@@ -577,7 +717,7 @@ def run_vision_session(
                 pending_results = model(
                     pending_frame.color,
                     imgsz=IMAGE_SIZE,
-                    conf=CONFIDENCE,
+                    conf=predict_conf,
                     verbose=False,
                 )
                 if require_mega and not serial_tx.mega_alive():
@@ -658,7 +798,7 @@ def run_vision_session(
                         results = model(
                             camera_frame.color,
                             imgsz=IMAGE_SIZE,
-                            conf=CONFIDENCE,
+                            conf=predict_conf,
                             verbose=False,
                         )
                         _record_stage("yolo", time.perf_counter() - _t0)
@@ -697,7 +837,8 @@ def run_vision_session(
                     # Original detection / grid / tracking / red-target /
                     # target-manager algorithm remains in the same order.
                     _t0 = time.perf_counter()
-                    raw_holes = build_holes(results)
+                    raw_holes = build_holes(results)  # >= CONFIDENCE only, as before
+                    low_holes = None if no_display else build_low_holes(results)
                     _record_stage("build_holes", time.perf_counter() - _t0)
 
                     if len(raw_holes) == 0 and camera_frame.depth_mm is not None:
@@ -725,6 +866,15 @@ def run_vision_session(
                         _record_stage("grid_tracker", time.perf_counter() - _t0)
                         for _name, _elapsed in grid_tracker.last_motion_timings.items():
                             _record_stage(f"grid_{_name}", _elapsed)
+
+                        # Holes YOLO missed but the grid places and the depth
+                        # finds: added as seen holes (2026-11-15).
+                        if DEPTH_CONFIRM_MISSING and camera_frame.depth_mm is not None:
+                            _t0 = time.perf_counter()
+                            holes = holes + fill_missing_with_depth(
+                                holes, camera_frame.depth_mm, camera_frame.intrinsics,
+                                depth_hole_detector, width, height)
+                            _record_stage("depth_fill", time.perf_counter() - _t0)
 
                         _t0 = time.perf_counter()
                         red_target = select_red_target(frame, holes, stabilizer)
@@ -806,6 +956,7 @@ def run_vision_session(
                             depth_mm=camera_frame.depth_mm,
                             depth_estimator=depth_estimator,
                             show_depth_ring=show_depth_ring,
+                            low_holes=low_holes,
                         )
                         cv2.imshow("Coordinate System RGB-D", frame)
 

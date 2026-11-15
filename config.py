@@ -6,6 +6,11 @@ CAMERA_SOURCE = "realsense"
 CAMERA_INDEX = 0
 IMAGE_SIZE = 640
 CONFIDENCE = 0.35
+# Live view only (2026-11-15, Jeremy: why a hole isn't boxed): with the
+# window open YOLO runs at this lower threshold and the boxes between it
+# and CONFIDENCE are drawn gray with their C -- never used for anything.
+# --no-display (the match) runs at CONFIDENCE as before.
+DEBUG_LOW_CONFIDENCE = 0.15
 
 ROWS = 4
 COLS = 3
@@ -139,3 +144,19 @@ CAPTURE_JPEG_QUALITY = 95
 # The Dashboard's P toggle (2026-11-14): one frame every this many seconds
 # (--capture-every, when given, sets the interval instead).
 CAPTURE_REMOTE_EVERY_SECONDS = 1.0
+
+# Depth fills a missing hole (2026-11-15, Jeremy: other holes are seen, one
+# isn't -> use the depth; every such hole counts like a YOLO one). For each
+# grid hole 1-12 YOLO missed this frame that the YOLO holes in view place
+# inside the frame (the v3 grid prediction), the depth detector's
+# candidates (DEPTH_HOLE_DETECT_*) are searched near that spot: within
+# DEPTH_CONFIRM_MAX_OFFSET_RATIO hole widths, and a candidate width of
+# DEPTH_CONFIRM_MIN/MAX_SIZE_RATIO times the YOLO holes' width in that row
+# (all rows when none of the row is boxed). A match is added as a seen hole
+# ("depth_confirmed": target choice, seen mask, lock, ring distance, shot).
+# Depth alone, without the YOLO grid placing the hole, still never counts
+# (2026-08-19 review). False = YOLO holes only, as before.
+DEPTH_CONFIRM_MISSING = True
+DEPTH_CONFIRM_MAX_OFFSET_RATIO = 0.5
+DEPTH_CONFIRM_MIN_SIZE_RATIO = 0.6
+DEPTH_CONFIRM_MAX_SIZE_RATIO = 1.6
