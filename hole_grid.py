@@ -12,7 +12,11 @@ from config import (
     GRID_MEMORY_PARTIAL_MAX_HOLES,
     GRID_MEMORY_SMOOTHING,
     GRID_DESKEW_MIN_DEG,
+    GRID_OUTLIER_ISOLATION_RATIO,
+    GRID_OUTLIER_MIN_HOLES,
+    GRID_OUTLIER_SIZE_RATIO,
     GRID_ROW_CHAIN_MAX_DEG,
+    GRID_ROW_CHAIN_MAX_GAP_RATIO,
     GRID_ROW_PAIR_MAX_DEG,
     GRID_ROW_PAIR_MAX_GAP_RATIO,
     GRID_PREDICT_MAX_OUTSIDE_RATIO,
@@ -123,8 +127,9 @@ def group_rows_by_chain(holes):
     (2026-11-21: one side much nearer, so a row's holes differ in size, y
     and spacing and the y threshold splits or merges rows). Each hole links
     to its nearest hole to the right (grid coordinates) within
-    GRID_ROW_CHAIN_MAX_DEG of horizontal and GRID_ROW_PAIR_MAX_GAP_RATIO x
-    the wider of the two boxes; linked holes are one row. Pieces of one row
+    GRID_ROW_CHAIN_MAX_DEG of horizontal and GRID_ROW_CHAIN_MAX_GAP_RATIO x
+    the widest of: the two boxes, the median box (the bonus holes are small
+    but spaced like the big ones); linked holes are one row. Pieces of one row
     (its middle hole missing) are joined back when their mean grid_y is
     within the usual row threshold and they don't overlap in x. Top to
     bottom, all rows."""
@@ -132,6 +137,7 @@ def group_rows_by_chain(holes):
         return []
     n = len(holes)
     median_h = float(np.median([h["box"][3] - h["box"][1] for h in holes]))
+    median_w = float(np.median([h["box"][2] - h["box"][0] for h in holes]))
     limit = math.radians(GRID_ROW_CHAIN_MAX_DEG)
     parent = list(range(n))
 
@@ -149,8 +155,8 @@ def group_rows_by_chain(holes):
             if dx <= 0:
                 continue
             dist = math.hypot(dx, dy)
-            max_gap = max(20.0, GRID_ROW_PAIR_MAX_GAP_RATIO
-                          * max(a["box"][2] - a["box"][0], b["box"][2] - b["box"][0]))
+            max_gap = max(20.0, GRID_ROW_CHAIN_MAX_GAP_RATIO
+                          * max(median_w, a["box"][2] - a["box"][0], b["box"][2] - b["box"][0]))
             if dist > max_gap or abs(math.atan2(dy, dx)) > limit:
                 continue
             if best is None or dist < best[0]:
@@ -728,7 +734,32 @@ def assign_ids_by_layout(holes, frame_width):
     return result
 
 
+def drop_off_grid_boxes(holes):
+    """YOLO boxes that can't be grid holes, left out of the grid
+    (2026-11-21 capture: a face boxed as a big hole, a door knob as a small
+    one far off the board -> a 13th box, duplicate ids, the bottom row
+    pushed out). Only with GRID_OUTLIER_MIN_HOLES or more boxes:
+      - diagonal > GRID_OUTLIER_SIZE_RATIO x the median diagonal;
+      - then, nearest other box > GRID_OUTLIER_ISOLATION_RATIO x the median
+        nearest-box distance.
+    Example: 12 holes ~60 px apart + a knob 230 px from the nearest -> knob out."""
+    if len(holes) < GRID_OUTLIER_MIN_HOLES:
+        return holes
+    diagonals = [math.hypot(h["box"][2] - h["box"][0], h["box"][3] - h["box"][1]) for h in holes]
+    median_d = float(np.median(diagonals))
+    holes = [h for h, d in zip(holes, diagonals) if d <= GRID_OUTLIER_SIZE_RATIO * median_d]
+    if len(holes) < GRID_OUTLIER_MIN_HOLES:
+        return holes
+    points = np.array([[h["cx"], h["cy"]] for h in holes], dtype=float)
+    dist = np.hypot(points[:, None, 0] - points[None, :, 0], points[:, None, 1] - points[None, :, 1])
+    np.fill_diagonal(dist, np.inf)
+    nearest = dist.min(axis=1)
+    median_nn = float(np.median(nearest))
+    return [h for h, d in zip(holes, nearest) if d <= GRID_OUTLIER_ISOLATION_RATIO * median_nn]
+
+
 def assign_ids(holes, frame_width):
+    holes = drop_off_grid_boxes(holes)
     set_grid_coords(holes)
 
     if len(holes) <= GRID_MEMORY_PARTIAL_MAX_HOLES:

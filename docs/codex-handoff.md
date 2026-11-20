@@ -2312,3 +2312,36 @@ frames 323 -> 294 complete), a size-ratio limit (no gain).
 
 **Next Test:** Orin `git pull`, restart; board turned 30-45 deg each way
 with and without roll: 12 boxed, bottom row ids 10 / 11 / 12.
+
+## 2026-11-21 (later 2) — Replay of a real tilt capture: bonus-row chain gap, off-grid boxes left out
+
+**User Request:** bottom row still missing at some angles (Orin on
+8cfaf81d); "not a training problem any more?" -- right.
+
+**Discussion Result:** replayed 164 captured frames
+(dataset_capture/20261121_023112, --capture-every 0.3) through YOLO ->
+assign_ids -> GridTracker in order. YOLO >= 12 boxes in 159; ids 1-12 only
+in 124. Causes: (1) the bonus row (small holes spaced like the big ones)
+split into 2 + 1 -> 5 rows -> the layout's top-4 cut the bottom row and
+shifted every id (145 px link vs a 142.5 px limit); (2) the face boxed as a
+big hole and (3) a door knob boxed as a small hole far off the board -> a
+13th box, duplicate ids, tracker mode.
+
+**Changed:** chain link limit GRID_ROW_CHAIN_MAX_GAP_RATIO (4.0) x the
+widest of the two boxes and the median box; `drop_off_grid_boxes` first in
+`assign_ids` (>= GRID_OUTLIER_MIN_HOLES 6 boxes): diagonal >
+GRID_OUTLIER_SIZE_RATIO (1.9) x median out, then nearest box >
+GRID_OUTLIER_ISOLATION_RATIO (2.5) x the median nearest-box distance out.
+Left-out boxes get no id (as dropped holes did before).
+
+**Evidence:** capture replay: frames with YOLO >= 12 but not ids 1-12
+35 -> 6 (the 6 are one stretch at the steepest angle, ids 1-9 kept). 411
+real frames: 4 keep more, 0 fewer, 0 different ids. Tilt sequences: same
+or more (yaw+roll 508 -> 511, yaw right+roll 509 -> 515), all kept ids
+correct. Id changes between consecutive capture frames: 13 before and
+after; the ones looked at are fast motion between 0.3 s frames (ids right
+in both). unittest 74 OK.
+
+**Next Test:** Orin `git pull`, restart; same moves as the capture; a face /
+knob in view must not take an id; the face and knob are YOLO false
+positives -- adding this capture to training as background is the model-side fix.

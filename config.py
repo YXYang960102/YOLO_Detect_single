@@ -37,6 +37,17 @@ GRID_ROW_PAIR_MAX_GAP_RATIO = 3.0
 # than 3), rows are rebuilt as chains of right-hand neighbours within this
 # many degrees of horizontal (and the pair gap ratio above, of the wider box).
 GRID_ROW_CHAIN_MAX_DEG = 25.0
+# Chain link length: this x the widest of the two boxes and the median box
+# (2026-11-21 capture: bonus holes are small but spaced like the big ones;
+# a 145 px link failed a 142 px limit at 3.0).
+GRID_ROW_CHAIN_MAX_GAP_RATIO = 4.0
+# Boxes that can't be grid holes are left out before ids (2026-11-21: a face
+# and a door knob boxed). Only with at least GRID_OUTLIER_MIN_HOLES boxes:
+# diagonal > SIZE_RATIO x median, or nearest box > ISOLATION_RATIO x the
+# median nearest-box distance.
+GRID_OUTLIER_MIN_HOLES = 6
+GRID_OUTLIER_SIZE_RATIO = 1.9
+GRID_OUTLIER_ISOLATION_RATIO = 2.5
 # Protocol v3 (2026-10-27): when the operator's hole is out of view, its
 # position is predicted from the holes in view with the same affine grid
 # fit the geometry assignment uses (hole_grid.predict_hole_position). Needs
