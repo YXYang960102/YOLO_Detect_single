@@ -10,6 +10,8 @@ neither was trained on.
                 any folder with images/ + labels/. Repeatable.
   --background  photos with no hole at all (dataset_prepared/.../no_holes
                 after removing the ones that do show a hole). Repeatable.
+  --train-only  labeled photos that go to training only, never to the check
+                (make_oblique.py's synthetic views). Repeatable.
   --old         the photos the current model was trained on (default: the
                 Roboflow TEL_2026_Field_V3 set, 300 photos). Always in
                 training, never in the check: the old model has seen them.
@@ -152,9 +154,13 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--new", action="append", default=[], help="corrected new-field set (repeatable)")
     ap.add_argument("--background", action="append", default=[], help="no-hole photos (repeatable)")
+    ap.add_argument("--train-only", action="append", default=[],
+                    help="labeled photos for training only, e.g. make_oblique.py output (repeatable)")
     ap.add_argument("--old", default=DEFAULT_OLD, help="the current model's training photos")
     ap.add_argument("--base", default=os.path.join(ROOT, "weights", "best.pt"), help="model to start from")
     ap.add_argument("--epochs", type=int, default=40)
+    ap.add_argument("--patience", type=int, default=15,
+                    help="stop after this many epochs with no val improvement (>= --epochs: never stop early)")
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--imgsz", type=int, default=640)
     ap.add_argument("--val-share", type=float, default=0.2)
@@ -189,9 +195,15 @@ def main():
     for folder in args.background:
         bg_pairs += [(img, None) for img, _ in pairs_in(os.path.expanduser(folder))]
     old_pairs = pairs_in(args.old)
+    extra_pairs = []
+    for folder in args.train_only:
+        got = pairs_in(os.path.expanduser(folder))
+        if not got:
+            sys.exit(f"{folder} 裡沒有照片")
+        extra_pairs += got
     unlabeled = [img for img, lbl in new_pairs if lbl is None]
 
-    classes = {b[0] for _, lbl in new_pairs + old_pairs for b in read_boxes(lbl)}
+    classes = {b[0] for _, lbl in new_pairs + old_pairs + extra_pairs for b in read_boxes(lbl)}
     if classes - {0}:
         sys.exit(f"標註裡有類別 {sorted(classes)}：這個模型只有一類 hole（0）。"
                  "Roboflow 專案只能有 hole 一個類別")
@@ -204,12 +216,14 @@ def main():
     place(old_pairs, os.path.join(work, "train"), "old")
     place(new_pairs[n_val:], os.path.join(work, "train"), "new")
     place(bg_pairs[b_val:], os.path.join(work, "train"), "bg", background=True)
+    place(extra_pairs, os.path.join(work, "train"), "extra")
     place(new_pairs[:n_val], os.path.join(work, "val"), "new")
     place(bg_pairs[:b_val], os.path.join(work, "val"), "bg", background=True)
     data_yaml = os.path.join(work, "data.yaml")
     with open(data_yaml, "w") as f:
         f.write(f"path: {work}\ntrain: train/images\nval: val/images\nnc: 1\nnames: ['hole']\n")
-    print(f"訓練：舊 {len(old_pairs)} + 新 {len(new_pairs) - n_val} + 背景 {len(bg_pairs) - b_val} 張")
+    print(f"訓練：舊 {len(old_pairs)} + 新 {len(new_pairs) - n_val} + 背景 {len(bg_pairs) - b_val} 張"
+          + (f" + 只訓練用 {len(extra_pairs)} 張" if extra_pairs else ""))
     print(f"檢查：新 {n_val} + 背景 {b_val} 張（兩個模型都沒訓練過）")
     if unlabeled:
         print(f"注意：新照片裡 {len(unlabeled)} 張沒有標註檔，當成沒有洞（Roboflow 的 null 照片就是這樣）")
@@ -218,7 +232,7 @@ def main():
     from ultralytics import YOLO
     model = YOLO(args.base)
     model.train(data=data_yaml, epochs=args.epochs, batch=args.batch, imgsz=args.imgsz, device=device,
-                patience=15, project=args.project, name=os.path.basename(work),
+                patience=args.patience, project=args.project, name=os.path.basename(work),
                 hsv_h=0.03, hsv_s=0.8, hsv_v=0.5, plots=True, verbose=False)
     new_best = os.path.join(str(model.trainer.save_dir), "weights", "best.pt")
 

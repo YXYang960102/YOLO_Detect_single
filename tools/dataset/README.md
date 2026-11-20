@@ -72,11 +72,27 @@ venv/bin/python tools/dataset/train_merge.py --new ~/Downloads/tel_field_1114 --
 
 - 新模型在 `runs/finetune/<時間>/weights/best.pt`。
 
-常用選項：`--epochs 60`、`--new` 和 `--background` 可以給很多次（例如今天＋正賽練習日）、
+常用選項：`--epochs 60`、`--patience 50`（連續 50 輪沒進步才停，預設 15；設成跟 `--epochs` 一樣就是一定跑滿）、`--new` 和 `--background` 可以給很多次（例如今天＋正賽練習日）、
 只重新比較不訓練：
 `venv/bin/python tools/dataset/train_merge.py --check-only datasets_merged/<時間> --compare runs/finetune/<時間>/weights/best.pt`
 
 **新模型漏抓和誤抓都沒有比較多，才換。**
+
+### 斜角、切邊照片（沒有實拍斜照片時）
+
+鏡頭稍微斜一點、或洞被畫面邊緣切到就抓不到時，用 `make_oblique.py` 從正面照片做出斜看、切邊的照片，**只放進訓練**：
+
+```bash
+venv/bin/python tools/dataset/make_oblique.py --src <有 images/ + labels/ 的資料夾> --only 20261120 \
+    --exclude-val datasets_merged/<上次的時間> --out dataset_prepared/oblique_train
+venv/bin/python tools/dataset/train_merge.py --new <同一個資料夾> --train-only dataset_prepared/oblique_train
+```
+
+- 把洞口牆當成一片板子，往上、下、左、右轉斜：每張照片每個方向一張 10–15°、一張 20–70°，再加一張正面切邊，共 9 張。
+- 一半的斜照片會再放大、平移，讓洞被邊緣切到；被切到的洞照還在畫面裡的部分重新框（露出不到 25% 或小於 6 px 的不框）。
+- `--exclude-val` 給上次合併的資料夾：檢查用的照片不拿來做斜照片，比較才公平。`--seed` 一樣，`train_merge.py` 的檢查組就一樣。
+- 檢查斜角：`make_oblique.py --check --src datasets_merged/<時間>/val --out dataset_prepared/oblique_check`，再用 `train_merge.py --check-only dataset_prepared/oblique_check/fit`（只斜）和 `.../cut`（斜加切邊）比較。
+- 做之前先確認標註：自動框留下來、框在燈或海報上的錯框要刪掉，邊緣被切到的洞要補框，不然斜照片會把錯的一起放大。
 
 ## 4. 換到 Orin（保留舊的，隨時換回來）
 
