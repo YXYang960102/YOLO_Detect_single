@@ -2225,3 +2225,55 @@ or depth_confirmed, not raw depth) with the shortest ring distance
 is untouched), computed only when the Mega asked; passed via **extra so
 older fakes / callers keep working. unittest 74 OK; checked: 9 fields
 before MEGA_NEAR, 10 after; 10 at 5.62 m vs 11 at 5.31 m -> 11.
+
+## 2026-11-21 — Tilted view: rows grouped along the grid's own slope (bottom row no longer dropped)
+
+**User Request:** "只要角度斜一點點下面那列就照不到" (bottom row in frame, a
+few degrees off and it is gone; no gray box either).
+
+**Discussion Result:** not the model. YOLO boxes all 12 at every tilt
+tested; `hole_grid.group_rows_by_y` grouped rows by plain image y (a hole
+>0.55 box heights from a row's mean y starts a new row) and kept only
+`rows[:ROWS]`, so a tilted row split in two and everything past the 4th
+"row" -- the bottom row -- was dropped after the threshold (hence no gray
+box), and the rest got wrong ids (screenshot: ID:10 on a middle-row hole).
+
+**Changed (hole_grid.py, config.py):**
+- `estimate_row_angle`: each hole's nearest neighbour within
+  GRID_ROW_PAIR_MAX_DEG (35) of horizontal and GRID_ROW_PAIR_MAX_GAP_RATIO
+  (3.0) median box widths; median direction = the rows' slope (needs 2 pairs).
+- `set_grid_coords` (first thing in `assign_ids`): grid_x / grid_y = cx / cy
+  turned back by that slope about the holes' centroid when |slope| >=
+  GRID_DESKEW_MIN_DEG (3), else = cx / cy (old behavior exactly).
+- Row grouping / ordering, row centers, column clustering / matching use
+  grid_x / grid_y (`_gx` / `_gy`, falling back to cx / cy). cx / cy, boxes,
+  grid anchors, affine fits, prediction and what goes to the Mega are image
+  coordinates as before.
+- `assign_ids_by_geometry` (<= 5 holes): with more than ROWS rows every
+  ordered choice of ROWS rows is scored and the best fit wins (the old top-4
+  choice is the first tried). Layout keeps the top 4 rows.
+
+**Calculation:** slope = median atan2(dy, dx) of row-neighbour pairs, e.g.
+110 px apart, 10 px lower -> 5.2 deg. grid_x = x0 + dx cos a + dy sin a,
+grid_y = y0 - dx sin a + dy cos a (dx, dy from the centroid).
+
+**Evidence (Mac, model runs/finetune/20261121_005322, conf 0.35):**
+- 6 clean val frames (12 holes, ids 1-12 straight), warped: roll +-1..20
+  deg, board up / down / left / right 15 / 30 deg; ids checked against the
+  straight frame through the warp. Old: kept 1114, correct 859 (fails from
+  roll +-1-2 deg: 9 kept, 3 correct). New: kept 1295, correct 1290.
+- 411 real frames (no warp): measured |slope| median 4.4 deg, 68 / 95 field
+  frames >= 3 deg, so the new path is the normal one on the field. Old /
+  new: holes kept 4379 / 4555, frames with ids 1-12 292 / 323, 72 frames
+  differ: 65 new keeps more, 1 fewer (IMG_3025, V1 augmented strong
+  perspective, both wrong), 6 same count different ids (looked at: new
+  right where it can be told, e.g. 000044 old "3" on a main hole -> new 6).
+- unittest 74 OK (unchanged tests).
+
+**Impact:** id assignment only. Target choice, depth, serial unchanged.
+Strong perspective (one side of the board much nearer) can still split rows
+(the slope differs per row); not seen on robot frames so far.
+
+**Next Test:** Orin, `git pull`, restart; the printout / field held tilted
+5-15 deg each way: all 12 boxed with ids matching the board (bottom row 10 /
+11 / 12 = Dashboard 1 / 4 / 7), Dashboard hole number aims at that hole.

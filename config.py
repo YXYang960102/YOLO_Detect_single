@@ -21,6 +21,16 @@ GRID_MEMORY_MAX_DISTANCE_RATIO = 0.85
 GRID_MEMORY_SMOOTHING = 0.25
 GRID_GEOMETRY_MAX_ERROR_RATIO = 0.75
 GRID_GEOMETRY_ANCHOR_WEIGHT = 0.35
+# Tilted view (2026-11-21, Jeremy: a few degrees off and the bottom row is
+# gone). Rows were grouped by plain image y, so a tilted row split into two
+# and everything past the 4th "row" was dropped. Now the rows' slope is
+# measured (each hole to its nearest neighbour within GRID_ROW_PAIR_MAX_DEG
+# of horizontal and GRID_ROW_PAIR_MAX_GAP_RATIO median box widths, median
+# angle) and, from GRID_DESKEW_MIN_DEG up, rows / columns are grouped in
+# coordinates turned back by that angle. Below it nothing changes.
+GRID_DESKEW_MIN_DEG = 3.0
+GRID_ROW_PAIR_MAX_DEG = 35.0
+GRID_ROW_PAIR_MAX_GAP_RATIO = 3.0
 # Protocol v3 (2026-10-27): when the operator's hole is out of view, its
 # position is predicted from the holes in view with the same affine grid
 # fit the geometry assignment uses (hole_grid.predict_hole_position). Needs

@@ -1,5 +1,7 @@
+import math
+
 import numpy as np
-from itertools import product
+from itertools import combinations, product
 
 from config import (
     COLS,
@@ -9,6 +11,9 @@ from config import (
     GRID_MEMORY_MIN_HOLES,
     GRID_MEMORY_PARTIAL_MAX_HOLES,
     GRID_MEMORY_SMOOTHING,
+    GRID_DESKEW_MIN_DEG,
+    GRID_ROW_PAIR_MAX_DEG,
+    GRID_ROW_PAIR_MAX_GAP_RATIO,
     GRID_PREDICT_MAX_OUTSIDE_RATIO,
     GRID_PREDICT_MIN_HOLES,
     ROWS,
@@ -33,8 +38,81 @@ def grid_memory_count():
     return len(grid_anchors)
 
 
-def group_rows_by_y(holes):
-    sorted_holes = sorted(holes, key=lambda h: h["cy"])
+def _gx(hole):
+    return hole.get("grid_x", hole["cx"])
+
+
+def _gy(hole):
+    return hole.get("grid_y", hole["cy"])
+
+
+def estimate_row_angle(holes):
+    """Slope of the grid's rows in radians (image y down, + = clockwise),
+    0.0 when it can't be told. Each hole's nearest neighbour that lies within
+    GRID_ROW_PAIR_MAX_DEG of horizontal and GRID_ROW_PAIR_MAX_GAP_RATIO median
+    box widths away is its row neighbour; the median of those directions is
+    the slope (one stray pair can't swing it). Needs two such pairs.
+
+    Example: holes in a row 110 px apart, the right one 10 px lower ->
+    atan2(10, 110) = 5.2 deg."""
+    if len(holes) < 3:
+        return 0.0
+    median_w = float(np.median([h["box"][2] - h["box"][0] for h in holes]))
+    max_gap = max(20.0, median_w * GRID_ROW_PAIR_MAX_GAP_RATIO)
+    limit = math.radians(GRID_ROW_PAIR_MAX_DEG)
+    angles = []
+    for i, a in enumerate(holes):
+        best = None
+        for j, b in enumerate(holes):
+            if i == j:
+                continue
+            dx = float(b["cx"] - a["cx"])
+            dy = float(b["cy"] - a["cy"])
+            if dx < 0:
+                dx, dy = -dx, -dy
+            dist = math.hypot(dx, dy)
+            if dist <= 0 or dist > max_gap:
+                continue
+            angle = math.atan2(dy, dx)
+            if abs(angle) > limit:
+                continue
+            if best is None or dist < best[0]:
+                best = (dist, angle)
+        if best is not None:
+            angles.append(best[1])
+    if len(angles) < 2:
+        return 0.0
+    return float(np.median(angles))
+
+
+def set_grid_coords(holes):
+    """grid_x / grid_y on every hole: the coordinates rows and columns are
+    grouped in. The image cx / cy turned back by the rows' slope about the
+    holes' centroid when that slope is GRID_DESKEW_MIN_DEG or more, else cx /
+    cy unchanged. Nothing else (boxes, cx / cy, grid memory, the target sent
+    to the Mega) uses them. Returns the angle used (radians)."""
+    angle = estimate_row_angle(holes) if holes else 0.0
+    if abs(angle) < math.radians(GRID_DESKEW_MIN_DEG):
+        angle = 0.0
+    if angle == 0.0:
+        for hole in holes:
+            hole["grid_x"] = hole["cx"]
+            hole["grid_y"] = hole["cy"]
+        return 0.0
+    x0 = float(np.mean([h["cx"] for h in holes]))
+    y0 = float(np.mean([h["cy"] for h in holes]))
+    c, s = math.cos(angle), math.sin(angle)
+    for hole in holes:
+        dx, dy = hole["cx"] - x0, hole["cy"] - y0
+        hole["grid_x"] = x0 + dx * c + dy * s
+        hole["grid_y"] = y0 - dx * s + dy * c
+    return angle
+
+
+def group_rows_by_y(holes, limit=ROWS):
+    """Rows top to bottom by grid_y (= cy when the view isn't tilted). At
+    most `limit` rows, the top ones (None: all of them)."""
+    sorted_holes = sorted(holes, key=_gy)
 
     if len(sorted_holes) == 0:
         return []
@@ -47,9 +125,9 @@ def group_rows_by_y(holes):
         placed = False
 
         for row in rows:
-            row_center = sum(h["cy"] for h in row) / len(row)
+            row_center = sum(_gy(h) for h in row) / len(row)
 
-            if abs(hole["cy"] - row_center) < row_threshold:
+            if abs(_gy(hole) - row_center) < row_threshold:
                 row.append(hole)
                 placed = True
                 break
@@ -57,8 +135,8 @@ def group_rows_by_y(holes):
         if not placed:
             rows.append([hole])
 
-    rows.sort(key=lambda row: sum(h["cy"] for h in row) / len(row))
-    return rows[:ROWS]
+    rows.sort(key=lambda row: sum(_gy(h) for h in row) / len(row))
+    return rows if limit is None else rows[:limit]
 
 
 def row_avg_height(row):
@@ -111,7 +189,7 @@ def update_column_centers(holes):
         return column_centers
 
     median_w = np.median([h["box"][2] - h["box"][0] for h in holes])
-    centers = cluster_axis([h["cx"] for h in holes], max(25, median_w * 0.8))
+    centers = cluster_axis([_gx(h) for h in holes], max(25, median_w * 0.8))
 
     if len(centers) >= COLS:
         column_centers = sorted(centers)[:COLS]
@@ -125,7 +203,7 @@ def update_row_centers(rows):
     if len(rows) < 3:
         return row_centers
 
-    visible_centers = [sum(h["cy"] for h in row) / len(row) for row in rows]
+    visible_centers = [sum(_gy(h) for h in row) / len(row) for row in rows]
 
     if len(visible_centers) >= ROWS:
         row_centers = visible_centers[:ROWS]
@@ -163,7 +241,7 @@ def estimate_row_indices(rows):
         indices = []
 
         for row in rows:
-            row_center = sum(h["cy"] for h in row) / len(row)
+            row_center = sum(_gy(h) for h in row) / len(row)
             best_index = None
             best_dist = None
 
@@ -204,14 +282,14 @@ def estimate_col_indices(row_holes, frame_width):
                 if i in used:
                     continue
 
-                dist = abs(hole["cx"] - center)
+                dist = abs(_gx(hole) - center)
 
                 if best_dist is None or dist < best_dist:
                     best_index = i
                     best_dist = dist
 
             if best_index is None:
-                best_index = min(range(COLS), key=lambda i: abs(hole["cx"] - centers[i]))
+                best_index = min(range(COLS), key=lambda i: abs(_gx(hole) - centers[i]))
 
             used.add(best_index)
             indices.append(best_index)
@@ -222,12 +300,12 @@ def estimate_col_indices(row_holes, frame_width):
         return [0, 1, 2]
 
     if len(row_holes) == 2:
-        avg_x = sum(h["cx"] for h in row_holes) / 2
+        avg_x = sum(_gx(h) for h in row_holes) / 2
         col_offset = 0 if avg_x < frame_width / 2 else 1
         return [col_offset, col_offset + 1]
 
     if len(row_holes) == 1:
-        x = row_holes[0]["cx"]
+        x = _gx(row_holes[0])
 
         if x < frame_width / 3:
             return [0]
@@ -497,30 +575,36 @@ def assign_ids_by_geometry(holes):
     if len(holes) < 4:
         return None
 
-    rows = group_rows_by_y(holes)
-    ordered_holes = []
+    all_rows = group_rows_by_y(holes, limit=None)
 
-    for row in rows:
-        row.sort(key=lambda h: h["cx"])
-        ordered_holes.extend(row)
+    for row in all_rows:
+        row.sort(key=_gx)
 
-    assignments = geometry_assignments_for_rows(rows)
-
-    if len(assignments) == 0:
-        return None
+    # More rows than the grid has (a stray box above / below): every choice
+    # of ROWS of them, in order, is tried and the best fit wins. The top
+    # ROWS -- the only choice before 2026-11-21 -- is the first one tried.
+    if len(all_rows) > ROWS:
+        row_sets = [[all_rows[i] for i in keep] for keep in combinations(range(len(all_rows)), ROWS)]
+    else:
+        row_sets = [all_rows]
 
     best_assignment = None
     best_score = None
+    ordered_holes = []
 
-    for assignment in assignments:
-        score = geometry_assignment_score(assignment, ordered_holes)
+    for rows in row_sets:
+        candidate_holes = [hole for row in rows for hole in row]
 
-        if score is None:
-            continue
+        for assignment in geometry_assignments_for_rows(rows):
+            score = geometry_assignment_score(assignment, candidate_holes)
 
-        if best_score is None or score < best_score:
-            best_score = score
-            best_assignment = assignment
+            if score is None:
+                continue
+
+            if best_score is None or score < best_score:
+                best_score = score
+                best_assignment = assignment
+                ordered_holes = candidate_holes
 
     if best_assignment is None:
         return None
@@ -551,7 +635,7 @@ def assign_ids_by_layout(holes, frame_width):
 
     for row_index, row_holes in zip(row_indices, rows):
         row_index = min(row_index, ROWS - 1)
-        row_holes.sort(key=lambda h: h["cx"])
+        row_holes.sort(key=_gx)
         col_indices = estimate_col_indices(row_holes, frame_width)
 
         for hole, col_index in zip(row_holes, col_indices):
@@ -565,6 +649,8 @@ def assign_ids_by_layout(holes, frame_width):
 
 
 def assign_ids(holes, frame_width):
+    set_grid_coords(holes)
+
     if len(holes) <= GRID_MEMORY_PARTIAL_MAX_HOLES:
         geometry_result = assign_ids_by_geometry(holes)
 
