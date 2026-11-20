@@ -31,6 +31,12 @@ GRID_GEOMETRY_ANCHOR_WEIGHT = 0.35
 GRID_DESKEW_MIN_DEG = 3.0
 GRID_ROW_PAIR_MAX_DEG = 35.0
 GRID_ROW_PAIR_MAX_GAP_RATIO = 3.0
+# Steep view (2026-11-21, Jeremy: the robot sees the board up to ~45 deg to
+# the side): one side nearer, so a row's holes differ in size / y / spacing.
+# When the y rows aren't a plausible grid (more than 4 rows or a row of more
+# than 3), rows are rebuilt as chains of right-hand neighbours within this
+# many degrees of horizontal (and the pair gap ratio above, of the wider box).
+GRID_ROW_CHAIN_MAX_DEG = 25.0
 # Protocol v3 (2026-10-27): when the operator's hole is out of view, its
 # position is predicted from the holes in view with the same affine grid
 # fit the geometry assignment uses (hole_grid.predict_hole_position). Needs

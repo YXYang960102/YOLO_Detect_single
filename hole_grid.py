@@ -12,6 +12,7 @@ from config import (
     GRID_MEMORY_PARTIAL_MAX_HOLES,
     GRID_MEMORY_SMOOTHING,
     GRID_DESKEW_MIN_DEG,
+    GRID_ROW_CHAIN_MAX_DEG,
     GRID_ROW_PAIR_MAX_DEG,
     GRID_ROW_PAIR_MAX_GAP_RATIO,
     GRID_PREDICT_MAX_OUTSIDE_RATIO,
@@ -109,9 +110,88 @@ def set_grid_coords(holes):
     return angle
 
 
+def _rows_plausible(rows):
+    return len(rows) <= ROWS and all(len(row) <= COLS for row in rows)
+
+
+def _row_mean_y(row):
+    return sum(_gy(h) for h in row) / len(row)
+
+
+def group_rows_by_chain(holes):
+    """Rows as chains of neighbour links, for a board seen at a steep angle
+    (2026-11-21: one side much nearer, so a row's holes differ in size, y
+    and spacing and the y threshold splits or merges rows). Each hole links
+    to its nearest hole to the right (grid coordinates) within
+    GRID_ROW_CHAIN_MAX_DEG of horizontal and GRID_ROW_PAIR_MAX_GAP_RATIO x
+    the wider of the two boxes; linked holes are one row. Pieces of one row
+    (its middle hole missing) are joined back when their mean grid_y is
+    within the usual row threshold and they don't overlap in x. Top to
+    bottom, all rows."""
+    if not holes:
+        return []
+    n = len(holes)
+    median_h = float(np.median([h["box"][3] - h["box"][1] for h in holes]))
+    limit = math.radians(GRID_ROW_CHAIN_MAX_DEG)
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i, a in enumerate(holes):
+        best = None
+        for j, b in enumerate(holes):
+            dx = _gx(b) - _gx(a)
+            dy = _gy(b) - _gy(a)
+            if dx <= 0:
+                continue
+            dist = math.hypot(dx, dy)
+            max_gap = max(20.0, GRID_ROW_PAIR_MAX_GAP_RATIO
+                          * max(a["box"][2] - a["box"][0], b["box"][2] - b["box"][0]))
+            if dist > max_gap or abs(math.atan2(dy, dx)) > limit:
+                continue
+            if best is None or dist < best[0]:
+                best = (dist, j)
+        if best is not None:
+            parent[find(i)] = find(best[1])
+
+    chains = {}
+    for i in range(n):
+        chains.setdefault(find(i), []).append(holes[i])
+    threshold = max(20, median_h * 0.55)
+    rows = []
+    for chain in sorted(chains.values(), key=_row_mean_y):
+        if rows:
+            last = rows[-1]
+            last_x = [_gx(h) for h in last]
+            chain_x = [_gx(h) for h in chain]
+            apart = min(chain_x) > max(last_x) or max(chain_x) < min(last_x)
+            if abs(_row_mean_y(chain) - _row_mean_y(last)) < threshold and apart:
+                rows[-1] = last + chain
+                continue
+        rows.append(chain)
+    rows.sort(key=_row_mean_y)
+    return rows
+
+
 def group_rows_by_y(holes, limit=ROWS):
-    """Rows top to bottom by grid_y (= cy when the view isn't tilted). At
-    most `limit` rows, the top ones (None: all of them)."""
+    """Rows top to bottom by grid_y (= cy when the view isn't tilted). When
+    that gives more than ROWS rows or a row of more than COLS holes, the
+    neighbour chains (group_rows_by_chain) are used instead if they make a
+    plausible grid; otherwise the y rows as before. At most `limit` rows,
+    the top ones (None: all of them)."""
+    rows = _group_rows_by_threshold(holes)
+    if not _rows_plausible(rows):
+        chained = group_rows_by_chain(holes)
+        if _rows_plausible(chained):
+            rows = chained
+    return rows if limit is None else rows[:limit]
+
+
+def _group_rows_by_threshold(holes):
     sorted_holes = sorted(holes, key=_gy)
 
     if len(sorted_holes) == 0:
@@ -135,8 +215,8 @@ def group_rows_by_y(holes, limit=ROWS):
         if not placed:
             rows.append([hole])
 
-    rows.sort(key=lambda row: sum(_gy(h) for h in row) / len(row))
-    return rows if limit is None else rows[:limit]
+    rows.sort(key=_row_mean_y)
+    return rows
 
 
 def row_avg_height(row):

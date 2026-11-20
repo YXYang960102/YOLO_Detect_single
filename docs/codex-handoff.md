@@ -2277,3 +2277,38 @@ Strong perspective (one side of the board much nearer) can still split rows
 **Next Test:** Orin, `git pull`, restart; the printout / field held tilted
 5-15 deg each way: all 12 boxed with ids matching the board (bottom row 10 /
 11 / 12 = Dashboard 1 / 4 / 7), Dashboard hole number aims at that hole.
+
+## 2026-11-21 (later) — Steep view: rows rebuilt from neighbour chains when the y rows aren't a grid
+
+**User Request:** still no bottom row with the board turned ~40-45 deg and
+rolled ~20 deg (screenshots, Orin already on e7062da5); the robot sees the
+board at such angles to the side.
+
+**Discussion Result:** one global slope can't straighten a perspective view
+(each row slopes differently, holes differ in size / y / spacing), so the y
+threshold still split or merged rows and the layout path dropped holes
+(YOLO had all 12). GridTracker was not the loss in simulation.
+
+**Changed (hole_grid.py, config.py):** `group_rows_by_y` = the y-threshold
+rows as before (`_group_rows_by_threshold`); only when they aren't
+plausible (> ROWS rows or a row > COLS holes) `group_rows_by_chain` is
+tried and used if plausible: each hole links to its nearest right-hand
+hole (grid coords) within GRID_ROW_CHAIN_MAX_DEG (25) of horizontal and
+GRID_ROW_PAIR_MAX_GAP_RATIO (3.0) x the wider of the two boxes (median
+width cut real near-side links: 126 px vs a 124 px limit); linked = one
+row; pieces with mean grid_y within the row threshold and no x overlap are
+joined. Tried and rejected: chains always (bonus row linked to row 1: real
+frames 323 -> 294 complete), a size-ratio limit (no gain).
+
+**Evidence (Mac, model 20261121_005322, conf 0.35):**
+- 4 clean frames, sequences 0-50 deg in 5 deg steps through YOLO ->
+  assign_ids -> GridTracker: kept (all correct) e7062da5 -> now: yaw left
+  519 -> 527, yaw right 516 -> 527, roll 528 = 528, yaw+roll 499 -> 508,
+  yaw right + roll 500 -> 509, pitch+roll 523 = 523 (YOLO found 519-531).
+  Full 12 up to ~40 deg combined; 45-50 deg can still lose 1-3 (partly
+  YOLO itself: 10 / 5 boxes).
+- 411 real frames: 2 keep more, 0 fewer, 0 different ids.
+- unittest 74 OK.
+
+**Next Test:** Orin `git pull`, restart; board turned 30-45 deg each way
+with and without roll: 12 boxed, bottom row ids 10 / 11 / 12.
